@@ -150,6 +150,9 @@ class PPO:
 
              # TODO ----- START -----
 
+            if self.normalize_advantage_per_mini_batch:
+                advantage_estimates = (advantage_estimates - advantage_estimates.mean()) / (advantage_estimates.std() + 1e-8)
+                
             self.actor_critic.update_distribution(observations)
             action_log_probs = self.actor_critic.get_actions_log_prob(sampled_actions)
             values = self.actor_critic.evaluate(critic_observations)
@@ -176,17 +179,17 @@ class PPO:
             policy_ratio = torch.exp(action_log_probs - prev_log_probs.squeeze(-1))
 
             surrogate = policy_ratio * advantages
-            surrogate_cliped = torch.clamp(policy_ratio, 1 - self.clip_param, 1 + self.clip_param) * advantages
+            surrogate_clipped = torch.clamp(policy_ratio, 1 - self.clip_param, 1 + self.clip_param) * advantages
 
-            surogate_loss = -torch.min(surr1, surr2).mean()
+            surogate_loss = -torch.min(surrogate, surrogate_clipped).mean()
 
             if self.use_clipped_value_loss:
-                value_pred_clipped = value_targets + (values - value_targets).clamp(-self.clip_param, self.clip_param)
+                value_pred_clipped = value_targets.detach() + (values - value_targets.detach()).clamp(-self.clip_param, self.clip_param)
                 value_losses = (values - discounted_returns.detach()).pow(2)
                 value_losses_clipped = (value_pred_clipped - discounted_returns.detach()).pow(2)
                 value_loss = torch.max(value_losses, value_losses_clipped).mean()
             else:
-                value_loss = F.mse_loss(values, discounted_returns.detach())
+                value_loss = (discounted_returns.detach()- values).pow(2).mean()
             
             loss = surogate_loss + (self.value_loss_coef * value_loss) - (self.entropy_coef * entropy.mean())
 
