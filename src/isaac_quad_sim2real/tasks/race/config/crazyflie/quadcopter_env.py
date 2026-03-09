@@ -273,6 +273,8 @@ class QuadcopterEnv(DirectRLEnv):
 
         self._crashed = torch.zeros(self.num_envs, device=self.device, dtype=torch.int)
 
+        self.num_lap_completed = torch.zeros(self.num_envs, device=self.device, dtype=torch.int)
+
         # Motor dynamics
         self.cfg.thrust_to_weight = 3.15
         r = self.cfg.arm_length * np.sqrt(2.0) / 2.0
