@@ -106,15 +106,27 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     log_dir = os.path.join(log_root_path, log_dir)
 
     # TODO ----- START ----- Define rewards scales
-    # reward scales
     progress_goal_reward_scale = 50.0
-    crash_reward = -1.0
-    death_cost = -10.0
+    gate_passed_reward_scale = 150.0
+    lap_passed_reward_scale = 500.0
+    crash_reward_scale = -1.0
+    death_cost = -20.0
+    altitude_reward_scale = -1.0
+    ang_vel_penalty_reward_scale = -0.001
+    action_smoothness_reward_scale = -0.003
 
     rewards = {
         'progress_goal_reward_scale': progress_goal_reward_scale,
-        'crash_reward_scale': crash_reward,
+        'gate_passed_reward_scale': gate_passed_reward_scale,
+        'lap_passed_reward_scale': lap_passed_reward_scale,
+        'crash_reward_scale': crash_reward_scale,
         'death_cost': death_cost,
+        "altitude_reward_scale": altitude_reward_scale,
+        # 'speed_reward_scale': speed_reward_scale,
+        #'ang_vel_penalty_reward_scale': ang_vel_penalty_reward_scale,
+        #'action_smoothness_reward_scale': action_smoothness_reward_scale,
+        # 'gate_alignment_reward_scale': gate_alignment_reward_scale,
+        # 'time_penalty_reward_scale': time_penalty_reward_scale,
     }
     # TODO ----- END -----
 
