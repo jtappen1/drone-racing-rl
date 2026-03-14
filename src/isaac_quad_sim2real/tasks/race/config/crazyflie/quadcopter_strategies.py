@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import torch
+import torch.nn.functional as F
 import numpy as np
 from typing import TYPE_CHECKING, Dict, Optional, Tuple
 
@@ -82,16 +83,23 @@ class DefaultQuadcopterStrategy:
         prev_x = self.env._prev_x_drone_wrt_gate
 
         half_side = self.env._gate_model_cfg_data.gate_side / 2.0
-        pass_half = half_side * 0.8  # tighter than full opening
+        pass_half = half_side * 0.8
+
+        dist_to_gate = torch.linalg.norm(self.env._pose_drone_wrt_gate, dim=1)
+
+        # Velocity alignment with gate normal (inverted — normals point opposite to pass direction)
+        gate_normal = self.env._normal_vectors[self.env._idx_wp]
+        vel_dir = torch.nn.functional.normalize(self.env._robot.data.root_com_lin_vel_w, dim=1)
+        alignment = torch.sum(vel_dir * gate_normal, dim=1)
 
         gate_passed = (
-            (prev_x > 0.0)                        # was in front
-            & (curr_x < 0.0)                      # now behind
-            & (torch.abs(curr_y) < pass_half)     # within gate width (with margin)
-            & (torch.abs(curr_z) < pass_half)     # within gate height (with margin)
-            & ((torch.abs(curr_x) < 1.0) | (torch.abs(prev_x) < 1.0))  # was near the plane
+            (prev_x > 0.0)
+            & (curr_x < 0.0)
+            & (dist_to_gate < 1.0)
+            & (torch.abs(curr_y) < pass_half)
+            & (torch.abs(curr_z) < pass_half)
+            & (alignment < -0.2)
         )
-
         ids_gate_passed = torch.where(gate_passed)[0]
 
         # Increment gate counter and advance waypoint
@@ -164,32 +172,13 @@ class DefaultQuadcopterStrategy:
         self.env._crashed = self.env._crashed + crashed * mask
 
         # -----------------------------------------------------------------
-        # Speed Toward Gate Reward (dense)
+        # Speed Reward (dense)
         # -----------------------------------------------------------------
-        # Velocity component projected onto direction toward current gate
-        drone_pos = self.env._robot.data.root_link_pos_w
-        drone_vel = self.env._robot.data.root_lin_vel_w
-        dir_to_gate = self.env._desired_pos_w[:, :3] - drone_pos
-        dist = torch.linalg.norm(dir_to_gate, dim=1, keepdim=True).clamp(min=1e-6)
-        dir_to_gate_norm = dir_to_gate / dist
-        speed_toward_gate = torch.sum(drone_vel * dir_to_gate_norm, dim=1)
-        # Clamp: only reward positive speed, cap at 5 m/s to prevent                         
-        # exploiting speed reward by reckless acceleration.                                       
-        speed_reward = torch.clamp(speed_toward_gate, min=0.0, max=5.0)  
-
-        # -----------------------------------------------------------------
-        # Gate Alignment Reward (dense)
-        # -----------------------------------------------------------------
-        # Reward drone for aligning its velocity with gate normal when close
-        current_gate_idx = self.env._idx_wp
-        gate_normal_w = self.env._normal_vectors[current_gate_idx]  # (num_envs, 3)
-        vel_norm = torch.linalg.norm(drone_vel, dim=1, keepdim=True).clamp(min=1e-6)
-        vel_dir = drone_vel / vel_norm
-        # dot product: 1.0 when perfectly aligned with gate-passing direction
-        alignment = torch.sum(vel_dir * gate_normal_w, dim=1)
-        # Weight by proximity to gate — only matters when close
-        proximity_weight = torch.exp(-distance_to_goal / 2.0)
-        gate_alignment_reward = torch.clamp(alignment, min=0.0) * proximity_weight
+        direction_to_gate = self.env._desired_pos_w[:, :3] - self.env._robot.data.root_link_pos_w
+        direction_to_gate_norm = direction_to_gate / (torch.linalg.norm(direction_to_gate, dim=1, keepdim=True) + 1e-6)
+        velocity_w = self.env._robot.data.root_com_lin_vel_w
+        speed_toward_gate = torch.sum(velocity_w * direction_to_gate_norm, dim=1)
+        speed_reward = torch.clamp(speed_toward_gate, min=0.0)
 
         # -----------------------------------------------------------------
         # Angular Velocity Penalty (dense)
@@ -197,11 +186,6 @@ class DefaultQuadcopterStrategy:
         ang_vel_b = self.env._robot.data.root_ang_vel_b
         ang_vel_penalty = torch.sum(ang_vel_b ** 2, dim=-1)
 
-        # -----------------------------------------------------------------
-        # Action Smoothness Penalty (dense)
-        # -----------------------------------------------------------------
-        action_diff = self.env._actions - self.env._previous_actions
-        action_smoothness_penalty = torch.sum(action_diff ** 2, dim=-1)
 
         # -----------------------------------------------------------------
         # Time Penalty (dense) — encourages speed
@@ -213,7 +197,8 @@ class DefaultQuadcopterStrategy:
         # -----------------------------------------------------------------
         gate_altitude = self.env._desired_pos_w[:, 2]  # current target gate height
         drone_altitude = self.env._robot.data.root_link_pos_w[:, 2]
-        altitude_error = torch.clamp(gate_altitude - drone_altitude, min=0.0)  # only penalize when below gate
+        # altitude_error = torch.clamp(gate_altitude - drone_altitude, min=0.0)  # only penalize when below gate
+        altitude_error = gate_altitude - drone_altitude # penalize when too high or too low now
         altitude_penalty = altitude_error ** 2
 
         # -----------------------------------------------------------------
@@ -226,11 +211,11 @@ class DefaultQuadcopterStrategy:
                 "crash": crashed * self.env.rew["crash_reward_scale"],
                 "lap_passed": lap_completed_reward * self.env.rew["lap_passed_reward_scale"],
                 "altitude": altitude_penalty * self.env.rew["altitude_reward_scale"],
-                #"speed": speed_reward * self.env.rew["speed_reward_scale"],
+                "speed": speed_reward * self.env.rew["speed_reward_scale"],
                 #"gate_alignment": gate_alignment_reward * self.env.rew["gate_alignment_reward_scale"],
-                #"ang_vel_penalty": ang_vel_penalty * self.env.rew["ang_vel_penalty_reward_scale"],
+                "ang_vel_penalty": ang_vel_penalty * self.env.rew["ang_vel_penalty_reward_scale"],
                 #"action_smoothness": action_smoothness_penalty * self.env.rew["action_smoothness_reward_scale"],
-                #"time_penalty": time_penalty * self.env.rew["time_penalty_reward_scale"],
+                "time_penalty": time_penalty * self.env.rew["time_penalty_reward_scale"],
             }
             reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
             reward = torch.where(
@@ -381,6 +366,17 @@ class DefaultQuadcopterStrategy:
 
         if self.cfg.is_train:
             iteration = self.env.iteration
+
+            # waypoint_indices = torch.zeros(n_reset, device=self.device, dtype=self.env._idx_wp.dtype)
+    
+            # # 30% of envs spawn behind gate 2 for powerloop practice
+            # hard_mask = torch.rand(n_reset, device=self.device) < 0.3
+            # waypoint_indices[hard_mask] = 2
+            
+            # x_local = torch.empty(n_reset, device=self.device).uniform_(-2.5, -0.5)
+            # y_local = torch.empty(n_reset, device=self.device).uniform_(-0.3, 0.3)
+            # z_local = torch.empty(n_reset, device=self.device).uniform_(-0.2, 0.2)
+            # yaw_noise = torch.empty(n_reset, device=self.device).uniform_(-0.2, 0.2)
 
             if iteration < 150:
                 # Learn to pass gate 0 from a fixed position

@@ -22,6 +22,7 @@ import argparse
 from isaaclab.app import AppLauncher
 import cli_args
 
+
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Train an RL agent with RSL-RL.")
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
@@ -111,9 +112,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     lap_passed_reward_scale = 500.0
     crash_reward_scale = -1.0
     death_cost = -20.0
-    altitude_reward_scale = -1.0
-    ang_vel_penalty_reward_scale = -0.001
-    action_smoothness_reward_scale = -0.003
+    altitude_reward_scale = -0.1 #-0.5 #-1.0
+    speed_reward_scale = 1.0 #0.5
+    ang_vel_penalty_reward_scale = -0.01
+    time_penalty_reward_scale = -0.1
+
+    #####
+    # Base Policy with proper gate alignment is trained WITHOUT speed reward, angular velocity penalty, and time penalty
+    # The base policy gets improved by using it as a checkpoint with more niche rewards
+
 
     rewards = {
         'progress_goal_reward_scale': progress_goal_reward_scale,
@@ -122,16 +129,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         'crash_reward_scale': crash_reward_scale,
         'death_cost': death_cost,
         "altitude_reward_scale": altitude_reward_scale,
-        # 'speed_reward_scale': speed_reward_scale,
-        #'ang_vel_penalty_reward_scale': ang_vel_penalty_reward_scale,
-        #'action_smoothness_reward_scale': action_smoothness_reward_scale,
-        # 'gate_alignment_reward_scale': gate_alignment_reward_scale,
-        # 'time_penalty_reward_scale': time_penalty_reward_scale,
+        "speed_reward_scale": speed_reward_scale,
+        'time_penalty_reward_scale': time_penalty_reward_scale,
+        "ang_vel_penalty_reward_scale": ang_vel_penalty_reward_scale,
     }
     # TODO ----- END -----
 
     env_cfg.is_train = True
     env_cfg.rewards = rewards
+    # So the env can compute common_step_counter for curriculum (e.g. in reset_idx).
+    env_cfg.num_steps_per_env = getattr(agent_cfg, "num_steps_per_env", 24)
 
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None, rewards=rewards)
