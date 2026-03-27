@@ -73,7 +73,7 @@ class DefaultQuadcopterStrategy:
                 [-0.4, -0.3, 1.4],
                 [-0.1,  0.0, 2.0],
                 [0.3, 0.5, 1.8],
-                [0.625, 1.0, 1.4],
+                [0.625, 0.0, 1.4],
             ], device=self.device
         )
 
@@ -206,28 +206,20 @@ class DefaultQuadcopterStrategy:
         # -----------------------------------------------------------------
         time_penalty = torch.ones(self.num_envs, device=self.device)
 
-        # -----------------------------------------------------------------
-        #  Altitude Penalty (dense) — prevents sitting on ground
-        # -----------------------------------------------------------------
-        gate_altitude = self.env._desired_pos_w[:, 2]  # current target gate height
-        drone_altitude = self.env._robot.data.root_link_pos_w[:, 2]
-        # altitude_error = torch.clamp(gate_altitude - drone_altitude, min=0.0)  # only penalize when below gate
-        altitude_error = gate_altitude - drone_altitude # penalize when too high or too low now
-        altitude_penalty = altitude_error ** 2
         
         # -----------------------------------------------------------------
         # Lookahead velocity reward
         # -----------------------------------------------------------------
 
-        # lookahead_reward = torch.zeros(self.num_envs, device=self.device)
-        # next_gate_idx = (self.env._idx_wp + 1) % self.env._waypoints.shape[0]
-        # next_gate = self.env._waypoints[next_gate_idx, :3]
+        lookahead_reward = torch.zeros(self.num_envs, device=self.device)
+        next_gate_idx = (self.env._idx_wp + 1) % self.env._waypoints.shape[0]
+        next_gate = self.env._waypoints[next_gate_idx, :3]
 
-        # to_next_gate = next_gate - self.env._robot.data.root_link_pos_w
-        # to_next_gate_norm = F.normalize(to_next_gate, dim=1)
+        to_next_gate = next_gate - self.env._robot.data.root_link_pos_w
+        to_next_gate_norm = F.normalize(to_next_gate, dim=1)
 
-        # vel_norm = F.normalize(self.env._robot.data.root_com_lin_vel_w, dim=1)
-        # lookahead_reward = torch.sum(vel_norm * to_next_gate_norm, dim=1).clamp(min=0.0)
+        vel_norm = F.normalize(self.env._robot.data.root_com_lin_vel_w, dim=1)
+        lookahead_reward = torch.sum(vel_norm * to_next_gate_norm, dim=1).clamp(min=0.0)
 
         # -----------------------------------------------------------------
         # Lap time reward
@@ -248,6 +240,7 @@ class DefaultQuadcopterStrategy:
         # Powerloop Velocity Reward
         # -----------------------------------------------------------------
         powerloop_reward = torch.zeros(self.num_envs, device=self.device)
+        inversion_reward = torch.zeros(self.num_envs, device=self.device)
         targeting_gate3 = (self.env._idx_wp == 3)
         if targeting_gate3.any():
             # powerloop_reward += inversion_reward
@@ -275,16 +268,18 @@ class DefaultQuadcopterStrategy:
             powerloop_reward = torch.where(targeting_gate3, vel_toward_next, powerloop_reward)
 
             # Inversion reward near apex (waypoint index 2)
-            near_apex = dists[:, 2] < 0.8
             drone_up = matrix_from_quat(self.env._robot.data.root_quat_w)[:, :, 2]
             world_up = torch.tensor([0.0, 0.0, 1.0], device=self.device)
             inversion = torch.sum(drone_up * world_up.unsqueeze(0), dim=1)
+           
+            drone_z = self.env._robot.data.root_link_pos_w[:, 2]
+            height_factor = torch.clamp((drone_z - 0.75) / 1.25, 0.0, 1.0)  # 0 at gate height, 1 at apex
             inversion_reward = torch.where(
-                targeting_gate3 & near_apex,
-                (-inversion).clamp(min=0.0),
+                targeting_gate3,
+                (-inversion).clamp(min=0.0) * height_factor,
                 torch.zeros(self.num_envs, device=self.device)
             )
-            powerloop_reward += inversion_reward
+
 
         # -----------------------------------------------------------------
         # Wrong way Penalty
@@ -311,14 +306,14 @@ class DefaultQuadcopterStrategy:
                 "gate_passed": gate_pass_reward * self.env.rew["gate_passed_reward_scale"],
                 "crash": crashed * self.env.rew["crash_reward_scale"],
                 "lap_passed": lap_completed_reward * self.env.rew["lap_passed_reward_scale"],
-                # "altitude": altitude_penalty * self.env.rew["altitude_reward_scale"],
                 "speed": speed_reward * self.env.rew["speed_reward_scale"],
-                # "lookahead": lookahead_reward * self.env.rew["lookahead_reward_scale"],
+                "lookahead": lookahead_reward * self.env.rew["lookahead_reward_scale"],
                 "ang_vel_penalty": ang_vel_penalty * self.env.rew["ang_vel_penalty_reward_scale"],
                 "time_penalty": time_penalty * self.env.rew["time_penalty_reward_scale"],
                 # "fast_lap": fast_lap_reward * self.env.rew["fast_lap_reward_scale"]
                 "powerloop" :    powerloop_reward * self.env.rew["powerloop_reward_scale"],
-                "wrong_way" : wrong_way_penalty * self.env.rew["wrong_way_reward_scale"]
+                "wrong_way" : wrong_way_penalty * self.env.rew["wrong_way_reward_scale"],
+                "inversion" : inversion_reward * self.env.rew["inversion_reward_scale"]
             }
             reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
             reward = torch.where(
