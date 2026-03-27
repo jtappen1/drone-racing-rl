@@ -68,6 +68,15 @@ class DefaultQuadcopterStrategy:
 
         # Thrust to weight ratio
         self.env._thrust_to_weight[:] = self.env._twr_value
+        self._lap_start_step = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
+        self.POWERLOOP_WAYPOINTS = torch.tensor([
+                [-0.3, -0.3, 1.4],
+                [0.0,  0.1, 2.0],
+                [0.3, 0.5, 1.9],
+                [0.625, 1.0, 1.8],
+            ], device=self.device
+        )
+
 
     # =========================================================================
     # REWARDS
@@ -130,8 +139,24 @@ class DefaultQuadcopterStrategy:
         distance_to_goal = torch.linalg.norm(
             self.env._desired_pos_w - self.env._robot.data.root_link_pos_w, dim=1
         )
-        # Sharper potential: divisor 1.5 instead of 3.0 gives stronger gradient
         progress = 1.0 - torch.tanh(distance_to_goal / 1.5)
+
+        # to_gate = self.env._desired_pos_w[:, :3] - self.env._robot.data.root_link_pos_w
+        # to_gate_norm = F.normalize(to_gate, dim=1)
+        # direction_alignment = torch.sum(to_gate_norm * (-gate_normal), dim=1)
+        # targeting_gate3 = (self.env._idx_wp == 3)
+        # progress = torch.where(
+        #     targeting_gate3,
+        #     (1.0 - torch.tanh(distance_to_goal / 1.5)) * direction_alignment.clamp(min=0.0),
+        #     progress,
+        # )
+
+        # Only count progress when moving in roughly the right direction
+        # aligned = direction_alignment > 0.3  # tunable threshold
+        # progress = torch.where(aligned, progress, torch.zeros_like(progress))
+
+        # Sharper potential: divisor 1.5 instead of 3.0 gives stronger gradient
+        # progress = 1.0 - torch.tanh(distance_to_goal / 1.5)
 
         progress_diff = progress - self._prev_progress
         self._prev_progress = progress.clone()
@@ -139,6 +164,7 @@ class DefaultQuadcopterStrategy:
         # Zero out progress diff for envs that just passed a gate
         # (distance jumps to new gate — would cause large negative reward)
         progress_diff[ids_gate_passed] = 0.0
+        # progress_diff[targeting_gate3] = 0.0
 
         # -----------------------------------------------------------------
         # Gate Pass Reward (sparse)
@@ -200,6 +226,141 @@ class DefaultQuadcopterStrategy:
         # altitude_error = torch.clamp(gate_altitude - drone_altitude, min=0.0)  # only penalize when below gate
         altitude_error = gate_altitude - drone_altitude # penalize when too high or too low now
         altitude_penalty = altitude_error ** 2
+        
+        # -----------------------------------------------------------------
+        # Lookahead velocity reward
+        # -----------------------------------------------------------------
+
+        # lookahead_reward = torch.zeros(self.num_envs, device=self.device)
+        # next_gate_idx = (self.env._idx_wp + 1) % self.env._waypoints.shape[0]
+        # next_gate = self.env._waypoints[next_gate_idx, :3]
+
+        # to_next_gate = next_gate - self.env._robot.data.root_link_pos_w
+        # to_next_gate_norm = F.normalize(to_next_gate, dim=1)
+
+        # vel_norm = F.normalize(self.env._robot.data.root_com_lin_vel_w, dim=1)
+        # lookahead_reward = torch.sum(vel_norm * to_next_gate_norm, dim=1).clamp(min=0.0)
+
+        # -----------------------------------------------------------------
+        # Lap time reward
+        # -----------------------------------------------------------------
+
+        # TIME_THRESHOLD = 6.0
+        # fast_lap_reward = torch.zeros(self.num_envs, device=self.device)
+        # dt = self.env.cfg.sim.dt * self.env.cfg.decimation  # policy timestep in seconds
+        # lap_time_s = (self.env.episode_length_buf[give_lap_reward] - self._lap_start_step[give_lap_reward]) * dt
+        
+        # fast_enough = lap_time_s < TIME_THRESHOLD
+        # give_lap_time_reward = give_lap_reward.clone()
+        # give_lap_time_reward[give_lap_reward] = fast_enough
+
+        # fast_lap_reward[give_lap_time_reward] = torch.clamp(TIME_THRESHOLD / lap_time_s[fast_enough], 0.5, 3.0)
+    
+
+        powerloop_reward = torch.zeros(self.num_envs, device=self.device)
+        targeting_gate3 = (self.env._idx_wp == 3)
+        if targeting_gate3.any():
+            # powerloop_reward += inversion_reward
+            drone_pos = self.env._robot.data.root_link_pos_w
+            velocity_w = self.env._robot.data.root_com_lin_vel_w
+
+            # Find closest waypoint for each env — this is the "current" target
+            dists = torch.stack([
+                torch.linalg.norm(drone_pos - wp.unsqueeze(0), dim=1)
+                for wp in self.POWERLOOP_WAYPOINTS
+            ], dim=1)  # (N, 4)
+            
+            closest_wp_idx = torch.argmin(dists, dim=1)  # (N,)
+            
+            # Get next waypoint after closest (clamped to last)
+            next_wp_idx = torch.clamp(closest_wp_idx + 1, max=len(self.POWERLOOP_WAYPOINTS) - 1)
+            next_wp_pos = self.POWERLOOP_WAYPOINTS[next_wp_idx]  # (N, 3)
+            
+            # Reward velocity toward next waypoint
+            to_next = next_wp_pos - drone_pos
+            to_next_norm = F.normalize(to_next, dim=1)
+            speed = torch.linalg.norm(velocity_w, dim=1, keepdim=True)
+            vel_toward_next = torch.sum(velocity_w * to_next_norm, dim=1).clamp(min=0.0)
+            
+            powerloop_reward = torch.where(targeting_gate3, vel_toward_next, powerloop_reward)
+
+            # Inversion reward near apex (waypoint index 2)
+            near_apex = dists[:, 2] < 0.8
+            drone_up = matrix_from_quat(self.env._robot.data.root_quat_w)[:, :, 2]
+            world_up = torch.tensor([0.0, 0.0, 1.0], device=self.device)
+            inversion = torch.sum(drone_up * world_up.unsqueeze(0), dim=1)
+            inversion_reward = torch.where(
+                targeting_gate3 & near_apex,
+                (-inversion).clamp(min=0.0),
+                torch.zeros(self.num_envs, device=self.device)
+            )
+            powerloop_reward += inversion_reward
+
+        # -----------------------------------------------------------------
+        # Wrong way Penalty
+        # -----------------------------------------------------------------
+        wrong_way = (
+            (prev_x > 0.0)
+            & (curr_x < 0.0)
+            & (dist_to_gate < 1.0)
+            & (torch.abs(curr_y) < pass_half)
+            & (torch.abs(curr_z) < pass_half)
+            & (alignment >= 0.0)  # positive alignment = wrong direction
+        )
+        ids_wrong_way = torch.where(wrong_way)[0]
+
+        wrong_way_penalty = torch.zeros(self.num_envs, device=self.device)
+        wrong_way_penalty[ids_wrong_way] = -1.0
+
+        # # Simple Altitude:
+        # powerloop_reward = torch.zeros(self.num_envs, device=self.device)
+        # targeting_gate3 = (self.env._idx_wp == 3)
+        # drone_z = self.env._robot.data.root_link_pos_w[:, 2]
+        # if targeting_gate3.any():
+        #     x_in_gate_frame = self.env._pose_drone_wrt_gate[:,0]
+        #     phase_a = targeting_gate3 & (x_in_gate_frame < 0.0)
+        #     # Normalized 0-1 version for reward use only
+        #     CREST_HEIGHT = 1.8
+        #     live_altitude = torch.clamp(drone_z / CREST_HEIGHT, 0.0, 1.0)
+        #     powerloop_reward[phase_a] = live_altitude[phase_a]
+
+        # In get_rewards, before gate pass detection
+        # targeting_gate3 = (self.env._idx_wp == 3)
+        # drone_z = self.env._robot.data.root_link_pos_w[:, 2]
+        # self._gate3_max_altitude = torch.where(
+        #     targeting_gate3,
+        #     torch.maximum(self._gate3_max_altitude, drone_z),
+        #     self._gate3_max_altitude,
+        # )
+
+        # # After gate_pass_reward is assigned, invalidate gate 3 passes that didn't crest
+        # CREST_HEIGHT = 1.8
+        # if len(ids_gate_passed) > 0:
+        #     gate3_no_crest = (self.env._idx_wp[ids_gate_passed] == 3) & \
+        #                     (self._gate3_max_altitude[ids_gate_passed] < CREST_HEIGHT)
+        #     gate_pass_reward[ids_gate_passed[gate3_no_crest]] = -1.0
+
+        # self._gate3_max_altitude[ids_gate_passed] = 0.0
+
+
+
+        # # # Gate 3 Altitude Reward: 
+        # targeting_gate3 = (self.env._idx_wp == 3)
+        # drone_z = self.env._robot.data.root_link_pos_w[:, 2]
+        # self._gate3_max_altitude = torch.where(
+        #     targeting_gate3,
+        #     torch.maximum(self._gate3_max_altitude, drone_z),
+        #     self._gate3_max_altitude,
+        # )
+
+        # After gate_pass_reward is assigned, invalidate gate 3 passes that didn't crest
+        # CREST_HEIGHT = 1.8
+        # if len(ids_gate_passed) > 0:
+        #     gate3_no_crest = (self.env._idx_wp[ids_gate_passed] == 3) & \
+        #                     (self._gate3_max_altitude[ids_gate_passed] < CREST_HEIGHT)
+        #     gate_pass_reward[ids_gate_passed[gate3_no_crest]] = -0.2
+
+        # self._gate3_max_altitude[ids_gate_passed] = 0.0
 
         # -----------------------------------------------------------------
         # Combine Rewards
@@ -210,12 +371,14 @@ class DefaultQuadcopterStrategy:
                 "gate_passed": gate_pass_reward * self.env.rew["gate_passed_reward_scale"],
                 "crash": crashed * self.env.rew["crash_reward_scale"],
                 "lap_passed": lap_completed_reward * self.env.rew["lap_passed_reward_scale"],
-                "altitude": altitude_penalty * self.env.rew["altitude_reward_scale"],
+                # "altitude": altitude_penalty * self.env.rew["altitude_reward_scale"],
                 "speed": speed_reward * self.env.rew["speed_reward_scale"],
-                #"gate_alignment": gate_alignment_reward * self.env.rew["gate_alignment_reward_scale"],
+                # "lookahead": lookahead_reward * self.env.rew["lookahead_reward_scale"],
                 "ang_vel_penalty": ang_vel_penalty * self.env.rew["ang_vel_penalty_reward_scale"],
-                #"action_smoothness": action_smoothness_penalty * self.env.rew["action_smoothness_reward_scale"],
                 "time_penalty": time_penalty * self.env.rew["time_penalty_reward_scale"],
+                # "fast_lap": fast_lap_reward * self.env.rew["fast_lap_reward_scale"]
+                "powerloop" :    powerloop_reward * self.env.rew["powerloop_reward_scale"],
+                "wrong_way" : wrong_way_penalty * self.env.rew["wrong_way_reward_scale"]
             }
             reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
             reward = torch.where(
@@ -284,6 +447,17 @@ class DefaultQuadcopterStrategy:
         # Previous actions (4)
         prev_actions = self.env._previous_actions
 
+        powerloop_pos_b_list = []
+        for wp in self.POWERLOOP_WAYPOINTS:
+            wp_pos_b, _ = subtract_frame_transforms(
+                self.env._robot.data.root_link_pos_w,
+                self.env._robot.data.root_quat_w,
+                wp.unsqueeze(0).expand(self.num_envs, -1),
+            )
+            powerloop_pos_b_list.append(wp_pos_b)
+
+        powerloop_obs = torch.cat(powerloop_pos_b_list, dim=-1)
+
         # Total: 3 + 3 + 3 + 3 + 3 + 3 + 4 = 22 dims
         obs = torch.cat(
             [
@@ -294,6 +468,7 @@ class DefaultQuadcopterStrategy:
                 gate_normal_b,         # (3) current gate normal in body frame
                 next_gate_pos_b,       # (3) next gate in body frame
                 prev_actions,          # (4) previous actions
+                powerloop_obs
             ],
             dim=-1,
         )
@@ -364,6 +539,8 @@ class DefaultQuadcopterStrategy:
         num_waypoints = self.env._waypoints.shape[0]
         self._total_resets += len(env_ids)
 
+        roll = torch.zeros(n_reset, device=self.device)
+
         if self.cfg.is_train:
             iteration = self.env.iteration
 
@@ -387,6 +564,21 @@ class DefaultQuadcopterStrategy:
                 yaw_noise = torch.empty(n_reset, device=self.device).uniform_(-0.15, 0.15)
 
             else:
+                # if iteration < 2000:
+                #     waypoint_indices = 3 * torch.ones(n_reset, device=self.device, dtype=self.env._idx_wp.dtype)
+                #     x_local = torch.empty(n_reset, device=self.device).uniform_(1.0, 2.0)
+                #     y_local = torch.empty(n_reset, device=self.device).uniform_(-0.3, 0.3)
+                #     z_local = torch.empty(n_reset, device=self.device).uniform_(1.5, 2.0)
+                #     yaw_noise = torch.empty(n_reset, device=self.device).uniform_(-0.15, 0.15)
+                #     roll = torch.pi + torch.empty(n_reset, device=self.device).uniform_(-0.2, 0.2)
+
+                # elif iteration <300:
+                #         waypoint_indices = 2 * torch.ones(n_reset, device=self.device, dtype=self.env._idx_wp.dtype)
+                #         x_local = torch.empty(n_reset, device=self.device).uniform_(-2.0, -0.5)
+                #         y_local = torch.empty(n_reset, device=self.device).uniform_(-0.3, 0.3)
+                #         z_local = torch.empty(n_reset, device=self.device).uniform_(-0.2, 0.2)
+                #         yaw_noise = torch.empty(n_reset, device=self.device).uniform_(-0.15, 0.15)
+
                 # Spawn behind gate 0 with noise — goal is to chain gate 0 → gate 1
                 waypoint_indices = torch.zeros(n_reset, device=self.device, dtype=self.env._idx_wp.dtype)
                 x_local = torch.empty(n_reset, device=self.device).uniform_(-2.5, -0.5)
@@ -394,44 +586,6 @@ class DefaultQuadcopterStrategy:
                 z_local = torch.empty(n_reset, device=self.device).uniform_(-0.2, 0.2)
                 yaw_noise = torch.empty(n_reset, device=self.device).uniform_(-0.2, 0.2)
 
-            # elif iteration < 650:
-            #     # Spawn behind gate 1 — goal is to chain gate 1 → gate 2 (approach the powerloop)
-            #     waypoint_indices = torch.ones(n_reset, device=self.device, dtype=self.env._idx_wp.dtype)
-            #     x_local = torch.empty(n_reset, device=self.device).uniform_(-2.0, -0.5)
-            #     y_local = torch.empty(n_reset, device=self.device).uniform_(-0.3, 0.3)
-            #     z_local = torch.empty(n_reset, device=self.device).uniform_(-0.2, 0.2)
-            #     yaw_noise = torch.empty(n_reset, device=self.device).uniform_(-0.2, 0.2)
-
-            # elif iteration < 900:
-            #     # Spawn behind gate 2 — goal is gate 2 → gate 3 (the actual powerloop)
-            #     waypoint_indices = 2 * torch.ones(n_reset, device=self.device, dtype=self.env._idx_wp.dtype)
-            #     x_local = torch.empty(n_reset, device=self.device).uniform_(-1.5, -0.3)
-            #     y_local = torch.empty(n_reset, device=self.device).uniform_(-0.3, 0.3)
-            #     z_local = torch.empty(n_reset, device=self.device).uniform_(-0.2, 0.2)
-            #     yaw_noise = torch.empty(n_reset, device=self.device).uniform_(-0.15, 0.15)
-
-            # elif iteration < 1100:
-            #     # Spawn behind gate 0, 1, or 2 — chain through the powerloop from further back
-            #     waypoint_indices = torch.randint(0, 3, (n_reset,), device=self.device, dtype=self.env._idx_wp.dtype)
-            #     x_local = torch.empty(n_reset, device=self.device).uniform_(-2.5, -0.5)
-            #     y_local = torch.empty(n_reset, device=self.device).uniform_(-0.5, 0.5)
-            #     z_local = torch.empty(n_reset, device=self.device).uniform_(-0.3, 0.3)
-            #     yaw_noise = torch.empty(n_reset, device=self.device).uniform_(-0.25, 0.25)
-
-            # elif iteration < 1400:
-            #     # Spawn at gates 0-5, learn the chicane section
-            #     waypoint_indices = torch.randint(0, 6, (n_reset,), device=self.device, dtype=self.env._idx_wp.dtype)
-            #     x_local = torch.empty(n_reset, device=self.device).uniform_(-3.0, -0.5)
-            #     y_local = torch.empty(n_reset, device=self.device).uniform_(-0.7, 0.7)
-            #     z_local = torch.empty(n_reset, device=self.device).uniform_(-0.4, 0.4)
-            #     yaw_noise = torch.empty(n_reset, device=self.device).uniform_(-0.3, 0.3)
-            # else:
-            #     # Phase 6: full track
-            #     waypoint_indices = torch.randint(0, num_waypoints, (n_reset,), device=self.device, dtype=self.env._idx_wp.dtype)
-            #     x_local = torch.empty(n_reset, device=self.device).uniform_(-3.0, -0.5)
-            #     y_local = torch.empty(n_reset, device=self.device).uniform_(-1.0, 1.0)
-            #     z_local = torch.empty(n_reset, device=self.device).uniform_(-0.5, 0.5)
-            #     yaw_noise = torch.empty(n_reset, device=self.device).uniform_(-0.3, 0.3)
         else:
             # Play mode: spawn behind the initial waypoint
             waypoint_indices = self.env._initial_wp * torch.ones(n_reset, device=self.device, dtype=self.env._idx_wp.dtype)
@@ -463,7 +617,7 @@ class DefaultQuadcopterStrategy:
         # Point drone towards the target gate
         initial_yaw = torch.atan2(y0_wp - initial_y, x0_wp - initial_x)
         quat = quat_from_euler_xyz(
-            torch.zeros(n_reset, device=self.device),
+            roll,
             torch.zeros(n_reset, device=self.device),
             initial_yaw + yaw_noise,
         )
@@ -506,3 +660,4 @@ class DefaultQuadcopterStrategy:
             dim=1,
         )
         self._prev_progress[env_ids] = 1.0 - torch.tanh(distance_to_goal / 3.0)
+        self._lap_start_step[env_ids] = 0.0

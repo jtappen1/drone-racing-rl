@@ -116,6 +116,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     speed_reward_scale = 1.0 #0.5
     ang_vel_penalty_reward_scale = -0.01
     time_penalty_reward_scale = -0.1
+    lookahead_reward_scale = 0.5
+    fast_lap_reward_scale = 500.0
+    powerloop_reward_scale = 0.1
+    wrong_way_reward_scale = 5.0
 
     #####
     # Base Policy with proper gate alignment is trained WITHOUT speed reward, angular velocity penalty, and time penalty
@@ -132,6 +136,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         "speed_reward_scale": speed_reward_scale,
         'time_penalty_reward_scale': time_penalty_reward_scale,
         "ang_vel_penalty_reward_scale": ang_vel_penalty_reward_scale,
+        "lookahead_reward_scale" : lookahead_reward_scale,
+        "fast_lap_reward_scale" : fast_lap_reward_scale,
+        "powerloop_reward_scale" : powerloop_reward_scale, 
+        "wrong_way_reward_scale" :wrong_way_reward_scale
     }
     # TODO ----- END -----
 

@@ -417,6 +417,7 @@ class QuadcopterEnv(DirectRLEnv):
                 [2.0, 3.5, 0.75, 0.0, 0.0, -1.5708],
                 [-1.5, 3.5, 2.00, 0.0, 0.0, 0.7854],
                 [-0.625, 0.0, 0.75, 0.0, 0.0, 1.5708],
+                # [0.625, 1.0, 1.80, 0.0, -1.5708, 1.5708],    # gate (NEW — above gate 3)
                 [0.625, 0.0, 0.75, 0.0, 0.0, 1.5708],
                 [-1.5, -3.5, 2.00, 0.0, 0.0, 2.356],
                 [2.0, -3.5, 0.75, 0.0, 0.0, -1.5708],
@@ -515,6 +516,29 @@ class QuadcopterEnv(DirectRLEnv):
                         # this creates multiple convex shapes that preserve the gate opening
                         mesh_collision_api = UsdPhysics.MeshCollisionAPI.Apply(mesh_prim)
                         mesh_collision_api.CreateApproximationAttr().Set("convexDecomposition")
+
+
+            POWERLOOP_WAYPOINTS = np.array([
+                [-0.3, -0.3, 1.4],   # climb — halfway between gate 2 and apex
+                [0.0,  0.1, 2.0],
+                [0.3, 0.5, 1.9], # apex — highest point, starting to invert
+                [0.625, 1.0, 1.8],   # descent — coming down invertecoming down inverted toward gate 3
+            ])
+
+            for idx, waypoint in enumerate(POWERLOOP_WAYPOINTS):
+                # Add apex visualization sphere for powerloop
+                apex_pos = Gf.Vec3d(waypoint[0], waypoint[1], waypoint[2])
+                apex_sphere_path = f"{env0_root_path_str}/powerloop_apex_{idx}"
+                apex_sphere_geom = UsdGeom.Sphere.Define(stage, Sdf.Path(apex_sphere_path))
+                apex_sphere_geom.GetRadiusAttr().Set(0.1)
+                UsdGeom.XformCommonAPI(apex_sphere_geom.GetPrim()).SetTranslate(apex_pos)
+                apex_primvars_api = UsdGeom.PrimvarsAPI(apex_sphere_geom.GetPrim())
+                apex_primvars_api.CreatePrimvar(
+                    "primvars:displayColor",
+                    Sdf.ValueTypeNames.Color3fArray,
+                    UsdGeom.Tokens.constant
+                ).Set([Gf.Vec3f(1.0, 0.0, 0.0)])  # red
+
 
             arrow_length = 0.5
             arrow_body_radius = 0.01
