@@ -70,10 +70,10 @@ class DefaultQuadcopterStrategy:
         self.env._thrust_to_weight[:] = self.env._twr_value
         self._lap_start_step = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
         self.POWERLOOP_WAYPOINTS = torch.tensor([
-                [-0.3, -0.3, 1.4],
-                [0.0,  0.1, 2.0],
-                [0.3, 0.5, 1.9],
-                [0.625, 1.0, 1.8],
+                [-0.4, -0.3, 1.4],
+                [-0.1,  0.0, 2.0],
+                [0.3, 0.5, 1.8],
+                [0.625, 1.0, 1.4],
             ], device=self.device
         )
 
@@ -141,30 +141,18 @@ class DefaultQuadcopterStrategy:
         )
         progress = 1.0 - torch.tanh(distance_to_goal / 1.5)
 
-        # to_gate = self.env._desired_pos_w[:, :3] - self.env._robot.data.root_link_pos_w
-        # to_gate_norm = F.normalize(to_gate, dim=1)
-        # direction_alignment = torch.sum(to_gate_norm * (-gate_normal), dim=1)
-        # targeting_gate3 = (self.env._idx_wp == 3)
-        # progress = torch.where(
-        #     targeting_gate3,
-        #     (1.0 - torch.tanh(distance_to_goal / 1.5)) * direction_alignment.clamp(min=0.0),
-        #     progress,
-        # )
-
-        # Only count progress when moving in roughly the right direction
-        # aligned = direction_alignment > 0.3  # tunable threshold
-        # progress = torch.where(aligned, progress, torch.zeros_like(progress))
-
-        # Sharper potential: divisor 1.5 instead of 3.0 gives stronger gradient
-        # progress = 1.0 - torch.tanh(distance_to_goal / 1.5)
-
         progress_diff = progress - self._prev_progress
         self._prev_progress = progress.clone()
 
         # Zero out progress diff for envs that just passed a gate
         # (distance jumps to new gate — would cause large negative reward)
         progress_diff[ids_gate_passed] = 0.0
-        # progress_diff[targeting_gate3] = 0.0
+
+        # NOTE: This is exploratory but works
+        targeting_gate3 = (self.env._idx_wp == 3)
+        drone_y = self.env._robot.data.root_link_pos_w[:, 1]
+        correct_side = ~targeting_gate3 | (drone_y > 0.0)
+        progress_diff = torch.where(correct_side, progress_diff, torch.zeros_like(progress_diff))
 
         # -----------------------------------------------------------------
         # Gate Pass Reward (sparse)
@@ -256,7 +244,9 @@ class DefaultQuadcopterStrategy:
 
         # fast_lap_reward[give_lap_time_reward] = torch.clamp(TIME_THRESHOLD / lap_time_s[fast_enough], 0.5, 3.0)
     
-
+        # -----------------------------------------------------------------
+        # Powerloop Velocity Reward
+        # -----------------------------------------------------------------
         powerloop_reward = torch.zeros(self.num_envs, device=self.device)
         targeting_gate3 = (self.env._idx_wp == 3)
         if targeting_gate3.any():
@@ -311,56 +301,6 @@ class DefaultQuadcopterStrategy:
 
         wrong_way_penalty = torch.zeros(self.num_envs, device=self.device)
         wrong_way_penalty[ids_wrong_way] = -1.0
-
-        # # Simple Altitude:
-        # powerloop_reward = torch.zeros(self.num_envs, device=self.device)
-        # targeting_gate3 = (self.env._idx_wp == 3)
-        # drone_z = self.env._robot.data.root_link_pos_w[:, 2]
-        # if targeting_gate3.any():
-        #     x_in_gate_frame = self.env._pose_drone_wrt_gate[:,0]
-        #     phase_a = targeting_gate3 & (x_in_gate_frame < 0.0)
-        #     # Normalized 0-1 version for reward use only
-        #     CREST_HEIGHT = 1.8
-        #     live_altitude = torch.clamp(drone_z / CREST_HEIGHT, 0.0, 1.0)
-        #     powerloop_reward[phase_a] = live_altitude[phase_a]
-
-        # In get_rewards, before gate pass detection
-        # targeting_gate3 = (self.env._idx_wp == 3)
-        # drone_z = self.env._robot.data.root_link_pos_w[:, 2]
-        # self._gate3_max_altitude = torch.where(
-        #     targeting_gate3,
-        #     torch.maximum(self._gate3_max_altitude, drone_z),
-        #     self._gate3_max_altitude,
-        # )
-
-        # # After gate_pass_reward is assigned, invalidate gate 3 passes that didn't crest
-        # CREST_HEIGHT = 1.8
-        # if len(ids_gate_passed) > 0:
-        #     gate3_no_crest = (self.env._idx_wp[ids_gate_passed] == 3) & \
-        #                     (self._gate3_max_altitude[ids_gate_passed] < CREST_HEIGHT)
-        #     gate_pass_reward[ids_gate_passed[gate3_no_crest]] = -1.0
-
-        # self._gate3_max_altitude[ids_gate_passed] = 0.0
-
-
-
-        # # # Gate 3 Altitude Reward: 
-        # targeting_gate3 = (self.env._idx_wp == 3)
-        # drone_z = self.env._robot.data.root_link_pos_w[:, 2]
-        # self._gate3_max_altitude = torch.where(
-        #     targeting_gate3,
-        #     torch.maximum(self._gate3_max_altitude, drone_z),
-        #     self._gate3_max_altitude,
-        # )
-
-        # After gate_pass_reward is assigned, invalidate gate 3 passes that didn't crest
-        # CREST_HEIGHT = 1.8
-        # if len(ids_gate_passed) > 0:
-        #     gate3_no_crest = (self.env._idx_wp[ids_gate_passed] == 3) & \
-        #                     (self._gate3_max_altitude[ids_gate_passed] < CREST_HEIGHT)
-        #     gate_pass_reward[ids_gate_passed[gate3_no_crest]] = -0.2
-
-        # self._gate3_max_altitude[ids_gate_passed] = 0.0
 
         # -----------------------------------------------------------------
         # Combine Rewards

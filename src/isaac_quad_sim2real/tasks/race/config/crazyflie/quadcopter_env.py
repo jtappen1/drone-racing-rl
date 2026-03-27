@@ -519,10 +519,10 @@ class QuadcopterEnv(DirectRLEnv):
 
 
             POWERLOOP_WAYPOINTS = np.array([
-                [-0.3, -0.3, 1.4],   # climb — halfway between gate 2 and apex
-                [0.0,  0.1, 2.0],
-                [0.3, 0.5, 1.9], # apex — highest point, starting to invert
-                [0.625, 1.0, 1.8],   # descent — coming down invertecoming down inverted toward gate 3
+                [-0.4, -0.3, 1.4],
+                [-0.1,  0.0, 2.0],
+                [0.3, 0.5, 1.8],
+                [0.625, 1.0, 1.4],
             ])
 
             for idx, waypoint in enumerate(POWERLOOP_WAYPOINTS):

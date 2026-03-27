@@ -118,7 +118,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     time_penalty_reward_scale = -0.1
     lookahead_reward_scale = 0.5
     fast_lap_reward_scale = 500.0
-    powerloop_reward_scale = 0.1
+    powerloop_reward_scale = 0.3
     wrong_way_reward_scale = 5.0
 
     #####
