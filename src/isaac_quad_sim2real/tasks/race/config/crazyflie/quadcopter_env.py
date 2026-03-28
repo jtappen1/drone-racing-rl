@@ -522,22 +522,22 @@ class QuadcopterEnv(DirectRLEnv):
                 [-0.4, -0.3, 1.4],
                 [-0.1,  0.0, 2.0],
                 [0.3, 0.5, 1.8],
-                [0.625, 0.6, 1.4],
+                [0.625, 0.0, 0.75],
             ])
 
-            for idx, waypoint in enumerate(POWERLOOP_WAYPOINTS):
-                # Add apex visualization sphere for powerloop
-                apex_pos = Gf.Vec3d(waypoint[0], waypoint[1], waypoint[2])
-                apex_sphere_path = f"{env0_root_path_str}/powerloop_apex_{idx}"
-                apex_sphere_geom = UsdGeom.Sphere.Define(stage, Sdf.Path(apex_sphere_path))
-                apex_sphere_geom.GetRadiusAttr().Set(0.1)
-                UsdGeom.XformCommonAPI(apex_sphere_geom.GetPrim()).SetTranslate(apex_pos)
-                apex_primvars_api = UsdGeom.PrimvarsAPI(apex_sphere_geom.GetPrim())
-                apex_primvars_api.CreatePrimvar(
-                    "primvars:displayColor",
-                    Sdf.ValueTypeNames.Color3fArray,
-                    UsdGeom.Tokens.constant
-                ).Set([Gf.Vec3f(1.0, 0.0, 0.0)])  # red
+            # for idx, waypoint in enumerate(POWERLOOP_WAYPOINTS):
+            #     # Add apex visualization sphere for powerloop
+            #     apex_pos = Gf.Vec3d(waypoint[0], waypoint[1], waypoint[2])
+            #     apex_sphere_path = f"{env0_root_path_str}/powerloop_apex_{idx}"
+            #     apex_sphere_geom = UsdGeom.Sphere.Define(stage, Sdf.Path(apex_sphere_path))
+            #     apex_sphere_geom.GetRadiusAttr().Set(0.1)
+            #     UsdGeom.XformCommonAPI(apex_sphere_geom.GetPrim()).SetTranslate(apex_pos)
+            #     apex_primvars_api = UsdGeom.PrimvarsAPI(apex_sphere_geom.GetPrim())
+            #     apex_primvars_api.CreatePrimvar(
+            #         "primvars:displayColor",
+            #         Sdf.ValueTypeNames.Color3fArray,
+            #         UsdGeom.Tokens.constant
+            #     ).Set([Gf.Vec3f(1.0, 0.0, 0.0)])  # red
 
 
             arrow_length = 0.5

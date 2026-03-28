@@ -110,14 +110,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     progress_goal_reward_scale = 50.0
     gate_passed_reward_scale = 150.0
     lap_passed_reward_scale = 500.0
-    crash_reward_scale = -5.0
-    death_cost = -100.0
+    crash_reward_scale = -1.0
+    death_cost = -20.0
     speed_reward_scale = 1.5 #0.5
     ang_vel_penalty_reward_scale = -0.01
-    time_penalty_reward_scale = -0.1
-    lookahead_reward_scale = 1.0
+    time_penalty_reward_scale = -2.0
+    lookahead_reward_scale = 0.5
     fast_lap_reward_scale = 500.0
-    powerloop_reward_scale = 0.7
+    powerloop_reward_scale = 1.5
     wrong_way_reward_scale = 5.0
     inversion_reward_scale = 2.0
 
