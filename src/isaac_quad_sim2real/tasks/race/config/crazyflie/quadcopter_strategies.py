@@ -96,7 +96,7 @@ class DefaultQuadcopterStrategy:
         prev_x = self.env._prev_x_drone_wrt_gate
 
         half_side = self.env._gate_model_cfg_data.gate_side / 2.0
-        pass_half = half_side * 0.8
+        pass_half = half_side
 
         dist_to_gate = torch.linalg.norm(self.env._pose_drone_wrt_gate, dim=1)
 
@@ -216,33 +216,6 @@ class DefaultQuadcopterStrategy:
         time_penalty = torch.clamp(lap_time_s / 8.0, 0.0, 1.0)
 
         
-        # -----------------------------------------------------------------
-        # Lookahead velocity reward
-        # -----------------------------------------------------------------
-        lookahead_reward = torch.zeros(self.num_envs, device=self.device)
-        next_gate_idx = (self.env._idx_wp + 1) % self.env._waypoints.shape[0]
-        next_gate = self.env._waypoints[next_gate_idx, :3]
-
-        to_next_gate = next_gate - self.env._robot.data.root_link_pos_w
-        to_next_gate_norm = F.normalize(to_next_gate, dim=1)
-
-        vel_norm = F.normalize(self.env._robot.data.root_com_lin_vel_w, dim=1)
-        lookahead_reward = torch.sum(vel_norm * to_next_gate_norm, dim=1).clamp(min=0.0)
-
-        # -----------------------------------------------------------------
-        # Lap time reward
-        # -----------------------------------------------------------------
-
-        TIME_THRESHOLD = 6.0
-        fast_lap_reward = torch.zeros(self.num_envs, device=self.device)
-        dt = self.env.cfg.sim.dt * self.env.cfg.decimation  # policy timestep in seconds
-        lap_time_s = (self.env.episode_length_buf[give_lap_reward] - self._lap_start_step[give_lap_reward]) * dt
-        
-        fast_enough = lap_time_s < TIME_THRESHOLD
-        give_lap_time_reward = give_lap_reward.clone()
-        give_lap_time_reward[give_lap_reward] = fast_enough
-
-        fast_lap_reward[give_lap_time_reward] = torch.clamp(TIME_THRESHOLD / lap_time_s[fast_enough], 0.5, 3.0)
     
         # -----------------------------------------------------------------
         # Powerloop Velocity Reward
@@ -251,7 +224,6 @@ class DefaultQuadcopterStrategy:
         inversion_reward = torch.zeros(self.num_envs, device=self.device)
         targeting_gate3 = (self.env._idx_wp == 3)
         if targeting_gate3.any():
-            # powerloop_reward += inversion_reward
             drone_pos = self.env._robot.data.root_link_pos_w
             velocity_w = self.env._robot.data.root_com_lin_vel_w
 
@@ -287,23 +259,7 @@ class DefaultQuadcopterStrategy:
                 (-inversion).clamp(min=0.0) * height_factor,
                 torch.zeros(self.num_envs, device=self.device)
             )
-
-
-        # -----------------------------------------------------------------
-        # Wrong way Penalty
-        # -----------------------------------------------------------------
-        wrong_way = (
-            (prev_x > 0.0)
-            & (curr_x < 0.0)
-            & (dist_to_gate < 1.0)
-            & (torch.abs(curr_y) < pass_half)
-            & (torch.abs(curr_z) < pass_half)
-            & (alignment >= 0.0)  # positive alignment = wrong direction
-        )
-        ids_wrong_way = torch.where(wrong_way)[0]
-
-        wrong_way_penalty = torch.zeros(self.num_envs, device=self.device)
-        wrong_way_penalty[ids_wrong_way] = -1.0
+            powerloop_reward += inversion_reward
 
         # -----------------------------------------------------------------
         # Combine Rewards
@@ -314,14 +270,10 @@ class DefaultQuadcopterStrategy:
                 "gate_passed": gate_pass_reward * self.env.rew["gate_passed_reward_scale"],
                 "crash": crashed * self.env.rew["crash_reward_scale"],
                 "lap_passed": lap_completed_reward * self.env.rew["lap_passed_reward_scale"],
-                "speed": speed_reward * self.env.rew["speed_reward_scale"],
-                "lookahead": lookahead_reward * self.env.rew["lookahead_reward_scale"],
+                # "speed": speed_reward * self.env.rew["speed_reward_scale"],
                 # "ang_vel_penalty": ang_vel_penalty * self.env.rew["ang_vel_penalty_reward_scale"],
                 "time_penalty": time_penalty * self.env.rew["time_penalty_reward_scale"],
-                "fast_lap": fast_lap_reward * self.env.rew["fast_lap_reward_scale"],
                 # "powerloop" :    powerloop_reward * self.env.rew["powerloop_reward_scale"],
-                "wrong_way" : wrong_way_penalty * self.env.rew["wrong_way_reward_scale"],
-                # "inversion" : inversion_reward * self.env.rew["inversion_reward_scale"]
             }
             reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
             reward = torch.where(
@@ -487,7 +439,7 @@ class DefaultQuadcopterStrategy:
         if self.cfg.is_train:
             iteration = self.env.iteration
 
-            if iteration < 150:
+            if iteration < 7750:
                 # Learn to pass gate 0 from a fixed position
                 waypoint_indices = torch.zeros(n_reset, device=self.device, dtype=self.env._idx_wp.dtype)
                 x_local = -2.0 * torch.ones(n_reset, device=self.device)
@@ -496,20 +448,6 @@ class DefaultQuadcopterStrategy:
                 yaw_noise = torch.empty(n_reset, device=self.device).uniform_(-0.15, 0.15)
 
             else:
-                # if iteration < 2000:
-                #     waypoint_indices = 3 * torch.ones(n_reset, device=self.device, dtype=self.env._idx_wp.dtype)
-                #     x_local = torch.empty(n_reset, device=self.device).uniform_(1.0, 2.0)
-                #     y_local = torch.empty(n_reset, device=self.device).uniform_(-0.3, 0.3)
-                #     z_local = torch.empty(n_reset, device=self.device).uniform_(1.5, 2.0)
-                #     yaw_noise = torch.empty(n_reset, device=self.device).uniform_(-0.15, 0.15)
-                #     roll = torch.pi + torch.empty(n_reset, device=self.device).uniform_(-0.2, 0.2)
-
-                # elif iteration <300:
-                #         waypoint_indices = 2 * torch.ones(n_reset, device=self.device, dtype=self.env._idx_wp.dtype)
-                #         x_local = torch.empty(n_reset, device=self.device).uniform_(-2.0, -0.5)
-                #         y_local = torch.empty(n_reset, device=self.device).uniform_(-0.3, 0.3)
-                #         z_local = torch.empty(n_reset, device=self.device).uniform_(-0.2, 0.2)
-                #         yaw_noise = torch.empty(n_reset, device=self.device).uniform_(-0.15, 0.15)
 
                 # Spawn behind gate 0 with noise — goal is to chain gate 0 → gate 1
                 waypoint_indices = torch.zeros(n_reset, device=self.device, dtype=self.env._idx_wp.dtype)
@@ -518,59 +456,106 @@ class DefaultQuadcopterStrategy:
                 z_local = torch.empty(n_reset, device=self.device).uniform_(-0.2, 0.2)
                 yaw_noise = torch.empty(n_reset, device=self.device).uniform_(-0.2, 0.2)
 
-                # n = len(env_ids)
+                n = len(env_ids)
 
-                # # Thrust to weight
-                # self.env._thrust_to_weight[env_ids] = torch.empty(n, device=self.device).uniform_(
-                #     self.cfg.thrust_to_weight * 0.95,
-                #     self.cfg.thrust_to_weight * 1.05
-                # )
+                # Thrust to weight
+                self.env._thrust_to_weight[env_ids] = torch.empty(n, device=self.device).uniform_(
+                    self.cfg.thrust_to_weight * 0.95,
+                    self.cfg.thrust_to_weight * 1.05
+                )
 
-                # # Aerodynamics
-                # self.env._K_aero[env_ids, :2] = torch.empty(n, 1, device=self.device).uniform_(
-                #     self.cfg.k_aero_xy * 0.5,
-                #     self.cfg.k_aero_xy * 2.0
-                # ).expand(n, 2)
-                # self.env._K_aero[env_ids, 2] = torch.empty(n, device=self.device).uniform_(
-                #     self.cfg.k_aero_z * 0.5,
-                #     self.cfg.k_aero_z * 2.0
-                # )
+                # Aerodynamics
+                self.env._K_aero[env_ids, :2] = torch.empty(n, 1, device=self.device).uniform_(
+                    self.cfg.k_aero_xy * 0.5,
+                    self.cfg.k_aero_xy * 2.0
+                ).expand(n, 2)
+                self.env._K_aero[env_ids, 2] = torch.empty(n, device=self.device).uniform_(
+                    self.cfg.k_aero_z * 0.5,
+                    self.cfg.k_aero_z * 2.0
+                )
 
-                # # PID roll/pitch
-                # self.env._kp_omega[env_ids, :2] = torch.empty(n, 1, device=self.device).uniform_(
-                #     self.cfg.kp_omega_rp * 0.85,
-                #     self.cfg.kp_omega_rp * 1.15
-                # ).expand(n, 2)
-                # self.env._ki_omega[env_ids, :2] = torch.empty(n, 1, device=self.device).uniform_(
-                #     self.cfg.ki_omega_rp * 0.85,
-                #     self.cfg.ki_omega_rp * 1.15
-                # ).expand(n, 2)
-                # self.env._kd_omega[env_ids, :2] = torch.empty(n, 1, device=self.device).uniform_(
-                #     self.cfg.kd_omega_rp * 0.7,
-                #     self.cfg.kd_omega_rp * 1.3
-                # ).expand(n, 2)
+                # PID roll/pitch
+                self.env._kp_omega[env_ids, :2] = torch.empty(n, 1, device=self.device).uniform_(
+                    self.cfg.kp_omega_rp * 0.85,
+                    self.cfg.kp_omega_rp * 1.15
+                ).expand(n, 2)
+                self.env._ki_omega[env_ids, :2] = torch.empty(n, 1, device=self.device).uniform_(
+                    self.cfg.ki_omega_rp * 0.85,
+                    self.cfg.ki_omega_rp * 1.15
+                ).expand(n, 2)
+                self.env._kd_omega[env_ids, :2] = torch.empty(n, 1, device=self.device).uniform_(
+                    self.cfg.kd_omega_rp * 0.7,
+                    self.cfg.kd_omega_rp * 1.3
+                ).expand(n, 2)
 
-                # # PID yaw
-                # self.env._kp_omega[env_ids, 2] = torch.empty(n, device=self.device).uniform_(
-                #     self.cfg.kp_omega_y * 0.85,
-                #     self.cfg.kp_omega_y * 1.15
-                # )
-                # self.env._ki_omega[env_ids, 2] = torch.empty(n, device=self.device).uniform_(
-                #     self.cfg.ki_omega_y * 0.85,
-                #     self.cfg.ki_omega_y * 1.15
-                # )
-                # self.env._kd_omega[env_ids, 2] = torch.empty(n, device=self.device).uniform_(
-                #     self.cfg.kd_omega_y * 0.7,
-                #     self.cfg.kd_omega_y * 1.3
-                # )
+                # PID yaw
+                self.env._kp_omega[env_ids, 2] = torch.empty(n, device=self.device).uniform_(
+                    self.cfg.kp_omega_y * 0.85,
+                    self.cfg.kp_omega_y * 1.15
+                )
+                self.env._ki_omega[env_ids, 2] = torch.empty(n, device=self.device).uniform_(
+                    self.cfg.ki_omega_y * 0.85,
+                    self.cfg.ki_omega_y * 1.15
+                )
+                self.env._kd_omega[env_ids, 2] = torch.empty(n, device=self.device).uniform_(
+                    self.cfg.kd_omega_y * 0.7,
+                    self.cfg.kd_omega_y * 1.3
+                )
+
 
         else:
+            print("WITH DOMAIN RANDOMIZATION")
             # Play mode: spawn behind the initial waypoint
             waypoint_indices = self.env._initial_wp * torch.ones(n_reset, device=self.device, dtype=self.env._idx_wp.dtype)
             x_local = torch.empty(n_reset, device=self.device).uniform_(-3.0, -0.5)
             y_local = torch.empty(n_reset, device=self.device).uniform_(-1.0, 1.0)
             z_local = torch.zeros(n_reset, device=self.device)
             yaw_noise = torch.zeros(n_reset, device=self.device)
+            n = len(env_ids)
+
+            self.env._thrust_to_weight[env_ids] = torch.empty(n, device=self.device).uniform_(
+                self.cfg.thrust_to_weight * 0.95,
+                self.cfg.thrust_to_weight * 1.05
+            )
+            print(f"Thrust to Weight {self.env._thrust_to_weight[0].item()}")
+            self.env._K_aero[env_ids, :2] = torch.empty(n, 1, device=self.device).uniform_(
+                self.cfg.k_aero_xy * 0.5,
+                self.cfg.k_aero_xy * 2.0
+            ).expand(n, 2)
+            print(f"K_areo xy : {self.env._K_aero[env_ids, 0].item()}")
+            self.env._K_aero[env_ids, 2] = torch.empty(n, device=self.device).uniform_(
+                self.cfg.k_aero_z * 0.5,
+                self.cfg.k_aero_z * 2.0
+            )
+            print(f"K_areo Z : {self.env._K_aero[env_ids, 2].item()}")
+
+            self.env._kp_omega[env_ids, :2] = torch.empty(n, 1, device=self.device).uniform_(
+                self.cfg.kp_omega_rp * 0.85,
+                self.cfg.kp_omega_rp * 1.15
+            ).expand(n, 2)
+            self.env._ki_omega[env_ids, :2] = torch.empty(n, 1, device=self.device).uniform_(
+                self.cfg.ki_omega_rp * 0.85,
+                self.cfg.ki_omega_rp * 1.15
+            ).expand(n, 2)
+            self.env._kd_omega[env_ids, :2] = torch.empty(n, 1, device=self.device).uniform_(
+                self.cfg.kd_omega_rp * 0.7,
+                self.cfg.kd_omega_rp * 1.3
+            ).expand(n, 2)
+            self.env._kp_omega[env_ids, 2] = torch.empty(n, device=self.device).uniform_(
+                self.cfg.kp_omega_y * 0.85,
+                self.cfg.kp_omega_y * 1.15
+            )
+            self.env._ki_omega[env_ids, 2] = torch.empty(n, device=self.device).uniform_(
+                self.cfg.ki_omega_y * 0.85,
+                self.cfg.ki_omega_y * 1.15
+            )
+            self.env._kd_omega[env_ids, 2] = torch.empty(n, device=self.device).uniform_(
+                self.cfg.kd_omega_y * 0.7,
+                self.cfg.kd_omega_y * 1.3
+            )
+            print(f"kp_omega yaw: {self.env._kp_omega[env_ids[0], 2].item()}")
+            print(f"ki_omega yaw: {self.env._ki_omega[env_ids[0], 2].item()}")
+            print(f"kd_omega yaw: {self.env._kd_omega[env_ids[0], 2].item()}")
 
         # -----------------------------------------------------------------
         # Compute world-frame spawn position from gate-local offset
