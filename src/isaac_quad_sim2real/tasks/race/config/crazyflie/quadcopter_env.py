@@ -345,6 +345,11 @@ class QuadcopterEnv(DirectRLEnv):
 
         self.set_debug_vis(self.cfg.debug_vis)
 
+        self._stats_total_laps = 0
+        self._stats_total_crashes = 0
+        self._stats_lap_times = []
+        self._stats_start_step = 0
+
     def update_iteration(self, iter):
         self.iteration = iter
 
@@ -525,21 +530,6 @@ class QuadcopterEnv(DirectRLEnv):
                 [0.625, 0.0, 0.75],
             ])
 
-            # for idx, waypoint in enumerate(POWERLOOP_WAYPOINTS):
-            #     # Add apex visualization sphere for powerloop
-            #     apex_pos = Gf.Vec3d(waypoint[0], waypoint[1], waypoint[2])
-            #     apex_sphere_path = f"{env0_root_path_str}/powerloop_apex_{idx}"
-            #     apex_sphere_geom = UsdGeom.Sphere.Define(stage, Sdf.Path(apex_sphere_path))
-            #     apex_sphere_geom.GetRadiusAttr().Set(0.1)
-            #     UsdGeom.XformCommonAPI(apex_sphere_geom.GetPrim()).SetTranslate(apex_pos)
-            #     apex_primvars_api = UsdGeom.PrimvarsAPI(apex_sphere_geom.GetPrim())
-            #     apex_primvars_api.CreatePrimvar(
-            #         "primvars:displayColor",
-            #         Sdf.ValueTypeNames.Color3fArray,
-            #         UsdGeom.Tokens.constant
-            #     ).Set([Gf.Vec3f(1.0, 0.0, 0.0)])  # red
-
-
             arrow_length = 0.5
             arrow_body_radius = 0.01
             arrow_head_radius = 0.03
@@ -711,8 +701,44 @@ class QuadcopterEnv(DirectRLEnv):
         # timeout conditions
         time_out = self.episode_length_buf >= self.max_episode_length - 1
         if not self.cfg.is_train:
-            time_out = time_out | ((self._n_gates_passed - 1) // (self._waypoints.shape[0]) >= self.cfg.max_n_laps)
+            lap_done = (self._n_gates_passed - 1) // (self._waypoints.shape[0]) >= self.cfg.max_n_laps
 
+            finishing_envs = torch.where(lap_done & ~time_out)[0]
+            if len(finishing_envs) > 0:
+                for env_id in finishing_envs:
+                    elapsed_s = self.episode_length_buf[env_id].item() * self.cfg.sim.dt * self.cfg.decimation
+                    avg_lap = elapsed_s / self.cfg.max_n_laps
+                    self._stats_lap_times.append(avg_lap)
+                    self._stats_total_laps += 1
+                    print(f"[Env {env_id.item()}] Completed 3 laps in {elapsed_s:.2f}s ({avg_lap:.2f}s avg)")
+
+            died_envs = torch.where(died)[0]
+            if len(died_envs) > 0:
+                self._stats_total_crashes += len(died_envs)
+
+            # Print summary every 10 completions
+            total = self._stats_total_laps + self._stats_total_crashes
+            if total > 0 and total % 10 == 0:
+                avg_time = sum(self._stats_lap_times) / len(self._stats_lap_times) if self._stats_lap_times else 0
+                best_time = min(self._stats_lap_times) if self._stats_lap_times else 0
+                worst_time = max(self._stats_lap_times) if self._stats_lap_times else 0
+                print(f"\n{'='*50}")
+                print(f"STATS after {total} episodes:")
+                print(f"  Completions : {self._stats_total_laps}")
+                print(f"  Crashes     : {self._stats_total_crashes}")
+                print(f"  Success rate: {self._stats_total_laps/total*100:.1f}%")
+                print(f"  Avg lap time: {avg_time:.2f}s")
+                print(f"  Best lap    : {best_time:.2f}s")
+                print(f"  Worst lap   : {worst_time:.2f}s")
+                avg_3lap = sum(self._stats_lap_times) / len(self._stats_lap_times)
+                best_3lap = min(self._stats_lap_times)
+                worst_3lap = max(self._stats_lap_times)
+                print(f"  Avg 3-lap time : {avg_3lap:.2f}s")
+                print(f"  Best 3-lap time: {best_3lap:.2f}s")
+                print(f"  Worst 3-lap time: {worst_3lap:.2f}s")
+                print(f"{'='*50}\n")
+
+            time_out = time_out | lap_done
         return died, time_out
 
     def _get_rewards(self) -> torch.Tensor:
