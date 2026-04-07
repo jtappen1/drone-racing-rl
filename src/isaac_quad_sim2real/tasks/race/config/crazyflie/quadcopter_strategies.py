@@ -448,8 +448,8 @@ class DefaultQuadcopterStrategy:
 
                 # Spawn behind gate 0 with noise — goal is to chain gate 0 → gate 1
                 waypoint_indices = torch.zeros(n_reset, device=self.device, dtype=self.env._idx_wp.dtype)
-                x_local = torch.empty(n_reset, device=self.device).uniform_(-2.5, -0.5)
-                y_local = torch.empty(n_reset, device=self.device).uniform_(-0.3, 0.3)
+                x_local = torch.empty(n_reset, device=self.device).uniform_(-3.0, -0.5)
+                y_local = torch.empty(n_reset, device=self.device).uniform_(-1.0, 1.0)
                 z_local = torch.empty(n_reset, device=self.device).uniform_(-0.2, 0.2)
                 yaw_noise = torch.empty(n_reset, device=self.device).uniform_(-0.2, 0.2)
 
@@ -507,55 +507,6 @@ class DefaultQuadcopterStrategy:
             y_local = torch.empty(n_reset, device=self.device).uniform_(-1.0, 1.0)
             z_local = torch.zeros(n_reset, device=self.device)
             yaw_noise = torch.zeros(n_reset, device=self.device)
-            n = len(env_ids)
-
-            self.env._thrust_to_weight[env_ids] = torch.empty(n, device=self.device).uniform_(
-                self.cfg.thrust_to_weight * 0.95,
-                self.cfg.thrust_to_weight * 1.05
-            )
-            self.env._K_aero[env_ids, :2] = torch.empty(n, 1, device=self.device).uniform_(
-                self.cfg.k_aero_xy * 0.5,
-                self.cfg.k_aero_xy * 2.0
-            ).expand(n, 2)
-            self.env._K_aero[env_ids, 2] = torch.empty(n, device=self.device).uniform_(
-                self.cfg.k_aero_z * 0.5,
-                self.cfg.k_aero_z * 2.0
-            )
-            self.env._kp_omega[env_ids, :2] = torch.empty(n, 1, device=self.device).uniform_(
-                self.cfg.kp_omega_rp * 0.85,
-                self.cfg.kp_omega_rp * 1.15
-            ).expand(n, 2)
-            self.env._ki_omega[env_ids, :2] = torch.empty(n, 1, device=self.device).uniform_(
-                self.cfg.ki_omega_rp * 0.85,
-                self.cfg.ki_omega_rp * 1.15
-            ).expand(n, 2)
-            self.env._kd_omega[env_ids, :2] = torch.empty(n, 1, device=self.device).uniform_(
-                self.cfg.kd_omega_rp * 0.7,
-                self.cfg.kd_omega_rp * 1.3
-            ).expand(n, 2)
-            self.env._kp_omega[env_ids, 2] = torch.empty(n, device=self.device).uniform_(
-                self.cfg.kp_omega_y * 0.85,
-                self.cfg.kp_omega_y * 1.15
-            )
-            self.env._ki_omega[env_ids, 2] = torch.empty(n, device=self.device).uniform_(
-                self.cfg.ki_omega_y * 0.85,
-                self.cfg.ki_omega_y * 1.15
-            )
-            self.env._kd_omega[env_ids, 2] = torch.empty(n, device=self.device).uniform_(
-                self.cfg.kd_omega_y * 0.7,
-                self.cfg.kd_omega_y * 1.3
-            )
-            # print(f"x: {x_local}")
-            # print(f"y: {y_local}")
-            # print(f"Thrust to Weight: {self.env._thrust_to_weight[env_ids]}")
-            # print(f"K_aero xy: {self.env._K_aero[env_ids, 0]}")
-            # print(f"K_aero z: {self.env._K_aero[env_ids, 2]}")
-            # print(f"kp_omega rp: {self.env._kp_omega[env_ids, 0]}")
-            # print(f"ki_omega rp: {self.env._ki_omega[env_ids, 0]}")
-            # print(f"kd_omega rp: {self.env._kd_omega[env_ids, 0]}")
-            # print(f"kp_omega yaw: {self.env._kp_omega[env_ids, 2]}")
-            # print(f"ki_omega yaw: {self.env._ki_omega[env_ids, 2]}")
-            # print(f"kd_omega yaw: {self.env._kd_omega[env_ids, 2]}")
 
         # -----------------------------------------------------------------
         # Compute world-frame spawn position from gate-local offset
@@ -623,3 +574,4 @@ class DefaultQuadcopterStrategy:
             dim=1,
         )
         self._prev_progress[env_ids] = 1.0 - torch.tanh(distance_to_goal / 3.0)
+    
