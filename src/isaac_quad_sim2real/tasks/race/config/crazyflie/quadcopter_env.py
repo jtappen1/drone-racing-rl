@@ -128,7 +128,7 @@ class GateModelCfg:
 @configclass
 class QuadcopterEnvCfg(DirectRLEnvCfg):
     use_wall = False
-    track_name = 'powerloop'
+    track_name = 'circle'
 
     # env
     episode_length_s = 30.0             # episode_length = episode_length_s / dt / decimation
@@ -435,6 +435,12 @@ class QuadcopterEnv(DirectRLEnv):
                 [ 1.5, 7.00, 0.75, 0.0, 0.0,  1.57],
                 [ 0.0, 5.25, 1.50, 0.0, 0.0,  0.00],
                 [-2.0, 3.50, 0.75, 0.0, 0.0,  1.57],
+            ],
+            'circle': [
+                [ 0.0 , 3.0 , 0.75 , 0.0 , 0.0 , 0.00] ,
+                [ -1.5 , 4.5 , 0.75 , 0.0 , 0.0 , -1.57] ,
+                [ 0.0 , 6.0 , 1.75 , 0.0 , 0.0 , 3.14] ,
+                [ 1.5 , 4.5 , 0.75 , 0.0 , 0.0 , 1.57]
             ]
         }
 

@@ -95,7 +95,7 @@ class DefaultQuadcopterStrategy:
         prev_x = self.env._prev_x_drone_wrt_gate
 
         half_side = self.env._gate_model_cfg_data.gate_side / 2.0
-        pass_half = half_side
+        pass_half = half_side * 0.5
 
         dist_to_gate = torch.linalg.norm(self.env._pose_drone_wrt_gate, dim=1)
 
@@ -151,11 +151,6 @@ class DefaultQuadcopterStrategy:
         # (distance jumps to new gate — would cause large negative reward)
         progress_diff[ids_gate_passed] = 0.0
 
-        # NOTE: This is exploratory but works
-        targeting_gate3 = (self.env._idx_wp == 3)
-        drone_y = self.env._robot.data.root_link_pos_w[:, 1]
-        correct_side = ~targeting_gate3 | (drone_y > 0.0)
-        progress_diff = torch.where(correct_side, progress_diff, torch.zeros_like(progress_diff))
 
         # -----------------------------------------------------------------
         # Gate Pass Reward (sparse)
@@ -194,71 +189,72 @@ class DefaultQuadcopterStrategy:
         # -----------------------------------------------------------------
         # Speed Reward (dense)
         # -----------------------------------------------------------------
-        direction_to_gate = self.env._desired_pos_w[:, :3] - self.env._robot.data.root_link_pos_w
-        direction_to_gate_norm = direction_to_gate / (torch.linalg.norm(direction_to_gate, dim=1, keepdim=True) + 1e-6)
-        velocity_w = self.env._robot.data.root_com_lin_vel_w
-        speed_toward_gate = torch.sum(velocity_w * direction_to_gate_norm, dim=1)
-        speed_reward = torch.clamp(speed_toward_gate, min=0.0)
+        # direction_to_gate = self.env._desired_pos_w[:, :3] - self.env._robot.data.root_link_pos_w
+        # direction_to_gate_norm = direction_to_gate / (torch.linalg.norm(direction_to_gate, dim=1, keepdim=True) + 1e-6)
+        # velocity_w = self.env._robot.data.root_com_lin_vel_w
+        # speed_toward_gate = torch.sum(velocity_w * direction_to_gate_norm, dim=1)
+        # speed_reward = torch.clamp(speed_toward_gate, min=0.0)
 
         # -----------------------------------------------------------------
         # Angular Velocity Penalty (dense)
         # -----------------------------------------------------------------
+        dt = self.cfg.sim.dt * self.cfg.decimation
         ang_vel_b = self.env._robot.data.root_ang_vel_b
-        ang_vel_penalty = torch.sum(ang_vel_b ** 2, dim=-1)
-
+        roll_pitch_rates = ang_vel_b[:, 0:2]
+        roll_pitch_rate = torch.sum(roll_pitch_rates ** 2, dim=-1)
+        yaw_rate = ang_vel_b[:, 2] ** 2
 
         # -----------------------------------------------------------------
         # Time Penalty (dense) — encourages speed
         # -----------------------------------------------------------------
-        dt = self.cfg.sim.dt * self.cfg.decimation
-        lap_time_s = self._lap_timer * dt
-        time_penalty = torch.clamp(lap_time_s / 8.0, 0.0, 1.0)
+        # lap_time_s = self._lap_timer * dt
+        # time_penalty = torch.clamp(lap_time_s / 8.0, 0.0, 1.0)
 
         
     
         # -----------------------------------------------------------------
         # Powerloop Velocity Reward
         # -----------------------------------------------------------------
-        powerloop_reward = torch.zeros(self.num_envs, device=self.device)
-        inversion_reward = torch.zeros(self.num_envs, device=self.device)
-        targeting_gate3 = (self.env._idx_wp == 3)
-        if targeting_gate3.any():
-            drone_pos = self.env._robot.data.root_link_pos_w
-            velocity_w = self.env._robot.data.root_com_lin_vel_w
+        # powerloop_reward = torch.zeros(self.num_envs, device=self.device)
+        # inversion_reward = torch.zeros(self.num_envs, device=self.device)
+        # targeting_gate3 = (self.env._idx_wp == 3)
+        # if targeting_gate3.any():
+        #     drone_pos = self.env._robot.data.root_link_pos_w
+        #     velocity_w = self.env._robot.data.root_com_lin_vel_w
 
-            # Find closest waypoint for each env — this is the "current" target
-            dists = torch.stack([
-                torch.linalg.norm(drone_pos - wp.unsqueeze(0), dim=1)
-                for wp in self.POWERLOOP_WAYPOINTS
-            ], dim=1)
+        #     # Find closest waypoint for each env — this is the "current" target
+        #     dists = torch.stack([
+        #         torch.linalg.norm(drone_pos - wp.unsqueeze(0), dim=1)
+        #         for wp in self.POWERLOOP_WAYPOINTS
+        #     ], dim=1)
             
-            closest_wp_idx = torch.argmin(dists, dim=1)
+        #     closest_wp_idx = torch.argmin(dists, dim=1)
             
-            # Get next waypoint after closest (clamped to last)
-            next_wp_idx = torch.clamp(closest_wp_idx + 1, max=len(self.POWERLOOP_WAYPOINTS) - 1)
-            next_wp_pos = self.POWERLOOP_WAYPOINTS[next_wp_idx]
+        #     # Get next waypoint after closest (clamped to last)
+        #     next_wp_idx = torch.clamp(closest_wp_idx + 1, max=len(self.POWERLOOP_WAYPOINTS) - 1)
+        #     next_wp_pos = self.POWERLOOP_WAYPOINTS[next_wp_idx]
             
-            # Reward velocity toward next waypoint
-            to_next = next_wp_pos - drone_pos
-            to_next_norm = F.normalize(to_next, dim=1)
-            speed = torch.linalg.norm(velocity_w, dim=1, keepdim=True)
-            vel_toward_next = torch.sum(velocity_w * to_next_norm, dim=1).clamp(min=0.0)
+        #     # Reward velocity toward next waypoint
+        #     to_next = next_wp_pos - drone_pos
+        #     to_next_norm = F.normalize(to_next, dim=1)
+        #     speed = torch.linalg.norm(velocity_w, dim=1, keepdim=True)
+        #     vel_toward_next = torch.sum(velocity_w * to_next_norm, dim=1).clamp(min=0.0)
             
-            powerloop_reward = torch.where(targeting_gate3, vel_toward_next, powerloop_reward)
+        #     powerloop_reward = torch.where(targeting_gate3, vel_toward_next, powerloop_reward)
 
-            # Inversion reward near apex (waypoint index 2)
-            drone_up = matrix_from_quat(self.env._robot.data.root_quat_w)[:, :, 2]
-            world_up = torch.tensor([0.0, 0.0, 1.0], device=self.device)
-            inversion = torch.sum(drone_up * world_up.unsqueeze(0), dim=1)
+        #     # Inversion reward near apex (waypoint index 2)
+        #     drone_up = matrix_from_quat(self.env._robot.data.root_quat_w)[:, :, 2]
+        #     world_up = torch.tensor([0.0, 0.0, 1.0], device=self.device)
+        #     inversion = torch.sum(drone_up * world_up.unsqueeze(0), dim=1)
            
-            drone_z = self.env._robot.data.root_link_pos_w[:, 2]
-            height_factor = torch.clamp((drone_z - 0.75) / 1.25, 0.0, 1.0)  # 0 at gate height, 1 at apex
-            inversion_reward = torch.where(
-                targeting_gate3,
-                (-inversion).clamp(min=0.0) * height_factor,
-                torch.zeros(self.num_envs, device=self.device)
-            )
-            powerloop_reward += inversion_reward
+        #     drone_z = self.env._robot.data.root_link_pos_w[:, 2]
+        #     height_factor = torch.clamp((drone_z - 0.75) / 1.25, 0.0, 1.0)  # 0 at gate height, 1 at apex
+        #     inversion_reward = torch.where(
+        #         targeting_gate3,
+        #         (-inversion).clamp(min=0.0) * height_factor,
+        #         torch.zeros(self.num_envs, device=self.device)
+        #     )
+        #     powerloop_reward += inversion_reward
 
         # -----------------------------------------------------------------
         # Combine Rewards
@@ -269,9 +265,11 @@ class DefaultQuadcopterStrategy:
                 "gate_passed": gate_pass_reward * self.env.rew["gate_passed_reward_scale"],
                 "crash": crashed * self.env.rew["crash_reward_scale"],
                 "lap_passed": lap_completed_reward * self.env.rew["lap_passed_reward_scale"],
+                "roll_pitch": roll_pitch_rate * self.env.rew["roll_pitch_reward_scale"] * dt, 
+                "yaw": yaw_rate * self.env.rew["yaw_reward_scale"] * dt
                 # "speed": speed_reward * self.env.rew["speed_reward_scale"],
                 # "ang_vel_penalty": ang_vel_penalty * self.env.rew["ang_vel_penalty_reward_scale"],
-                "time_penalty": time_penalty * self.env.rew["time_penalty_reward_scale"],
+                # "time_penalty": time_penalty * self.env.rew["time_penalty_reward_scale"],
                 # "powerloop" :    powerloop_reward * self.env.rew["powerloop_reward_scale"],
             }
             reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
@@ -294,80 +292,80 @@ class DefaultQuadcopterStrategy:
     # =========================================================================
     # OBSERVATIONS (22 dims, all body frame)
     # =========================================================================
-    def get_observations(self) -> Dict[str, torch.Tensor]:
+    # def get_observations(self) -> Dict[str, torch.Tensor]:
 
-        # Linear velocity in body frame (3)
-        drone_lin_vel_b = self.env._robot.data.root_com_lin_vel_b
+    #     # Linear velocity in body frame (3)
+    #     drone_lin_vel_b = self.env._robot.data.root_com_lin_vel_b
 
-        # Angular velocity in body frame (3)
-        drone_ang_vel_b = self.env._robot.data.root_ang_vel_b
+    #     # Angular velocity in body frame (3)
+    #     drone_ang_vel_b = self.env._robot.data.root_ang_vel_b
 
-        # Projected gravity vector in body frame (3)
-        # Replaces quaternion — avoids q/-q ambiguity, only 3 dims
-        quat_w = self.env._robot.data.root_quat_w
-        rot_matrix = matrix_from_quat(quat_w)  # (num_envs, 3, 3)
-        gravity_world = torch.tensor([0.0, 0.0, -1.0], device=self.device)
-        projected_gravity = torch.matmul(
-            rot_matrix.transpose(1, 2),
-            gravity_world.unsqueeze(-1),
-        ).squeeze(-1)  # (num_envs, 3)
+    #     # Projected gravity vector in body frame (3)
+    #     # Replaces quaternion — avoids q/-q ambiguity, only 3 dims
+    #     quat_w = self.env._robot.data.root_quat_w
+    #     rot_matrix = matrix_from_quat(quat_w)  # (num_envs, 3, 3)
+    #     gravity_world = torch.tensor([0.0, 0.0, -1.0], device=self.device)
+    #     projected_gravity = torch.matmul(
+    #         rot_matrix.transpose(1, 2),
+    #         gravity_world.unsqueeze(-1),
+    #     ).squeeze(-1)  # (num_envs, 3)
 
-        # Current gate position in body frame (3)
-        current_gate_idx = self.env._idx_wp
-        current_gate_pos_w = self.env._waypoints[current_gate_idx, :3]
-        gate_pos_b, _ = subtract_frame_transforms(
-            self.env._robot.data.root_link_pos_w,
-            self.env._robot.data.root_quat_w,
-            current_gate_pos_w,
-        )
+    #     # Current gate position in body frame (3)
+    #     current_gate_idx = self.env._idx_wp
+    #     current_gate_pos_w = self.env._waypoints[current_gate_idx, :3]
+    #     gate_pos_b, _ = subtract_frame_transforms(
+    #         self.env._robot.data.root_link_pos_w,
+    #         self.env._robot.data.root_quat_w,
+    #         current_gate_pos_w,
+    #     )
 
-        # Current gate normal in body frame (3)
-        gate_normal_w = self.env._normal_vectors[current_gate_idx]
-        rot_matrix = matrix_from_quat(self.env._robot.data.root_quat_w)
-        gate_normal_b = torch.matmul(
-            rot_matrix.transpose(1, 2),
-            gate_normal_w.unsqueeze(-1),
-        ).squeeze(-1)  # (num_envs, 3)
+    #     # Current gate normal in body frame (3)
+    #     gate_normal_w = self.env._normal_vectors[current_gate_idx]
+    #     rot_matrix = matrix_from_quat(self.env._robot.data.root_quat_w)
+    #     gate_normal_b = torch.matmul(
+    #         rot_matrix.transpose(1, 2),
+    #         gate_normal_w.unsqueeze(-1),
+    #     ).squeeze(-1)  # (num_envs, 3)
 
-        # Next gate position in body frame (3)
-        next_gate_idx = (current_gate_idx + 1) % self.env._waypoints.shape[0]
-        next_gate_pos_w = self.env._waypoints[next_gate_idx, :3]
-        next_gate_pos_b, _ = subtract_frame_transforms(
-            self.env._robot.data.root_link_pos_w,
-            self.env._robot.data.root_quat_w,
-            next_gate_pos_w,
-        )
+    #     # Next gate position in body frame (3)
+    #     next_gate_idx = (current_gate_idx + 1) % self.env._waypoints.shape[0]
+    #     next_gate_pos_w = self.env._waypoints[next_gate_idx, :3]
+    #     next_gate_pos_b, _ = subtract_frame_transforms(
+    #         self.env._robot.data.root_link_pos_w,
+    #         self.env._robot.data.root_quat_w,
+    #         next_gate_pos_w,
+    #     )
 
-        # Previous actions (4)
-        prev_actions = self.env._previous_actions
+    #     # Previous actions (4)
+    #     prev_actions = self.env._previous_actions
 
-        powerloop_pos_b_list = []
-        for wp in self.POWERLOOP_WAYPOINTS:
-            wp_pos_b, _ = subtract_frame_transforms(
-                self.env._robot.data.root_link_pos_w,
-                self.env._robot.data.root_quat_w,
-                wp.unsqueeze(0).expand(self.num_envs, -1),
-            )
-            powerloop_pos_b_list.append(wp_pos_b)
+    #     powerloop_pos_b_list = []
+    #     for wp in self.POWERLOOP_WAYPOINTS:
+    #         wp_pos_b, _ = subtract_frame_transforms(
+    #             self.env._robot.data.root_link_pos_w,
+    #             self.env._robot.data.root_quat_w,
+    #             wp.unsqueeze(0).expand(self.num_envs, -1),
+    #         )
+    #         powerloop_pos_b_list.append(wp_pos_b)
 
-        powerloop_obs = torch.cat(powerloop_pos_b_list, dim=-1)
+    #     powerloop_obs = torch.cat(powerloop_pos_b_list, dim=-1)
 
-        # Total: 3 + 3 + 3 + 3 + 3 + 3 + 4 = 22 dims
-        obs = torch.cat(
-            [
-                drone_lin_vel_b,       # (3) velocity
-                drone_ang_vel_b,       # (3) body rates
-                projected_gravity,     # (3) orientation
-                gate_pos_b,            # (3) current gate in body frame
-                gate_normal_b,         # (3) current gate normal in body frame
-                next_gate_pos_b,       # (3) next gate in body frame
-                prev_actions,          # (4) previous actions
-                powerloop_obs
-            ],
-            dim=-1,
-        )
-        observations = {"policy": obs}
-        return observations
+    #     # Total: 3 + 3 + 3 + 3 + 3 + 3 + 4 = 22 dims
+    #     obs = torch.cat(
+    #         [
+    #             drone_lin_vel_b,       # (3) velocity
+    #             drone_ang_vel_b,       # (3) body rates
+    #             projected_gravity,     # (3) orientation
+    #             gate_pos_b,            # (3) current gate in body frame
+    #             gate_normal_b,         # (3) current gate normal in body frame
+    #             next_gate_pos_b,       # (3) next gate in body frame
+    #             prev_actions,          # (4) previous actions
+    #             powerloop_obs
+    #         ],
+    #         dim=-1,
+    #     )
+    #     observations = {"policy": obs}
+    #     return observations
 
     # =========================================================================
     # RESET
@@ -436,13 +434,20 @@ class DefaultQuadcopterStrategy:
         if self.cfg.is_train:
             iteration = self.env.iteration
 
-            if iteration < 7750:
+            if iteration < 150:
                 # Learn to pass gate 0 from a fixed position
                 waypoint_indices = torch.zeros(n_reset, device=self.device, dtype=self.env._idx_wp.dtype)
                 x_local = -2.0 * torch.ones(n_reset, device=self.device)
                 y_local = torch.zeros(n_reset, device=self.device)
                 z_local = torch.zeros(n_reset, device=self.device)
                 yaw_noise = torch.empty(n_reset, device=self.device).uniform_(-0.15, 0.15)
+
+            elif iteration < 500:
+                waypoint_indices = torch.zeros(n_reset, device=self.device, dtype=self.env._idx_wp.dtype)
+                x_local = torch.empty(n_reset, device=self.device).uniform_(-3.0, -0.5)
+                y_local = torch.empty(n_reset, device=self.device).uniform_(-1.0, 1.0)
+                z_local = torch.empty(n_reset, device=self.device).uniform_(-0.2, 0.2)
+                yaw_noise = torch.empty(n_reset, device=self.device).uniform_(-0.2, 0.2)
 
             else:
 
@@ -498,7 +503,6 @@ class DefaultQuadcopterStrategy:
                     self.cfg.kd_omega_y * 0.7,
                     self.cfg.kd_omega_y * 1.3
                 )
-
 
         else:
             # Play mode: spawn behind the initial waypoint
@@ -574,4 +578,63 @@ class DefaultQuadcopterStrategy:
             dim=1,
         )
         self._prev_progress[env_ids] = 1.0 - torch.tanh(distance_to_goal / 3.0)
-    
+
+    def get_observations(self) -> Dict[str, torch.Tensor]:
+        """Get observations including waypoint positions and drone state."""
+        curr_idx = self.env._idx_wp % self.env._waypoints.shape[0]
+        next_idx = (self.env._idx_wp + 1) % self.env._waypoints.shape[0]
+
+        wp_curr_pos = self.env._waypoints[curr_idx, :3]
+        wp_next_pos = self.env._waypoints[next_idx, :3]
+        quat_curr = self.env._waypoints_quat[curr_idx]
+        quat_next = self.env._waypoints_quat[next_idx]
+
+        rot_curr = matrix_from_quat(quat_curr)
+        rot_next = matrix_from_quat(quat_next)
+
+        verts_curr = torch.bmm(self.env._local_square, rot_curr.transpose(1, 2)) + wp_curr_pos.unsqueeze(1) + self.env._terrain.env_origins.unsqueeze(1)
+        verts_next = torch.bmm(self.env._local_square, rot_next.transpose(1, 2)) + wp_next_pos.unsqueeze(1) + self.env._terrain.env_origins.unsqueeze(1)
+
+        waypoint_pos_b_curr, _ = subtract_frame_transforms(
+            self.env._robot.data.root_link_state_w[:, :3].repeat_interleave(4, dim=0),
+            self.env._robot.data.root_link_state_w[:, 3:7].repeat_interleave(4, dim=0),
+            verts_curr.view(-1, 3)
+        )
+        waypoint_pos_b_next, _ = subtract_frame_transforms(
+            self.env._robot.data.root_link_state_w[:, :3].repeat_interleave(4, dim=0),
+            self.env._robot.data.root_link_state_w[:, 3:7].repeat_interleave(4, dim=0),
+            verts_next.view(-1, 3)
+        )
+
+        waypoint_pos_b_curr = waypoint_pos_b_curr.view(self.num_envs, 4, 3)
+        waypoint_pos_b_next = waypoint_pos_b_next.view(self.num_envs, 4, 3)
+
+        quat_w = self.env._robot.data.root_quat_w
+        attitude_mat = matrix_from_quat(quat_w)
+
+        obs = torch.cat(
+            [
+                self.env._robot.data.root_com_lin_vel_b,			# 3 dim (linear vel in body frame)
+                attitude_mat.view(attitude_mat.shape[0], -1),			# 9 dim (drone rotation matrix)
+                waypoint_pos_b_curr.view(waypoint_pos_b_curr.shape[0], -1),	# 12 dim (corners of current gate)
+                waypoint_pos_b_next.view(waypoint_pos_b_next.shape[0], -1),	# 12 dim (corners of next gate)
+            ],
+            dim=-1,
+        )
+        observations = {"policy": obs}
+
+        # Update yaw tracking
+        rpy = euler_xyz_from_quat(quat_w)
+        yaw_w = wrap_to_pi(rpy[2])
+
+        delta_yaw = yaw_w - self.env._previous_yaw
+        self.env._previous_yaw = yaw_w
+        self.env._yaw_n_laps += torch.where(delta_yaw < -np.pi, 1, 0)
+        self.env._yaw_n_laps -= torch.where(delta_yaw > np.pi, 1, 0)
+
+        self.env.unwrapped_yaw = yaw_w + 2 * np.pi * self.env._yaw_n_laps
+
+        self.env._previous_actions = self.env._actions.clone()
+
+        return observations
+
