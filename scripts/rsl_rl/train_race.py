@@ -107,16 +107,18 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     log_dir = os.path.join(log_root_path, log_dir)
 
     # TODO ----- START ----- Define rewards scales
-    # progress_goal_reward_scale = 2.0
-    gate_passed_reward_scale = 50.0
-    # lap_passed_reward_scale = 300.0
-    crash_reward_scale = -1.0
-    death_cost = -200.0
-    roll_pitch_reward_scale = -0.5
-    yaw_reward_scale = -0.1
-    lookahead_reward_scale = 0.05
+    progress_goal_reward_scale = 2.0
+    gate_passed_reward_scale = 250.0
+    crash_reward_scale = -1.2
+    death_cost = -20.0
+    roll_pitch_reward_scale = -0.005
+    yaw_reward_scale = -0.0005
+    ang_accel_reward_scale = -0.000001 
+    wrong_way_penalty = -2000.0
+
+
     # speed_reward_scale = -0.10
-    # time_penalty_reward_scale = -0.001
+    # time_penalty_reward_scale = 0.1
     # powerloop_reward_scale = 1.5
     # speed_reward_scale = 1.85 #0.5
     # ang_vel_penalty_reward_scale = -0.005
@@ -127,14 +129,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
 
     rewards = {
-        # 'progress_goal_reward_scale': progress_goal_reward_scale,
+        'progress_goal_reward_scale': progress_goal_reward_scale,
         'gate_passed_reward_scale': gate_passed_reward_scale,
-        # 'lap_passed_reward_scale': lap_passed_reward_scale,
         'crash_reward_scale': crash_reward_scale,
         'death_cost': death_cost,
         'roll_pitch_reward_scale' : roll_pitch_reward_scale,
         'yaw_reward_scale' : yaw_reward_scale,
-        'lookahead_reward_scale' : lookahead_reward_scale
+        'ang_accel_reward_scale': ang_accel_reward_scale,
+        'wrong_way_reward_scale': wrong_way_penalty
+        
+        # 'lookahead_reward_scale' : lookahead_reward_scale,
         # 'speed_reward_scale': speed_reward_scale 
         # "powerloop_reward_scale" : powerloop_reward_scale, 
         # 'time_penalty_reward_scale': time_penalty_reward_scale,
