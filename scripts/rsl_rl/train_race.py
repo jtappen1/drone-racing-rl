@@ -108,12 +108,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # TODO ----- START ----- Define rewards scales
     progress_goal_reward_scale = 2.0
-    gate_passed_reward_scale = 250.0
-    crash_reward_scale = -1.2
-    death_cost = -20.0
-    roll_pitch_reward_scale = -0.005
-    yaw_reward_scale = -0.0005
-    ang_accel_reward_scale = -0.000001 
+    gate_passed_reward_scale = 150.0
+    crash_reward_scale = -1.5
+    death_cost = -300.0
+    roll_pitch_reward_scale = -0.07
+    yaw_reward_scale = -0.001
+    ang_accel_reward_scale = -0.00005 
     wrong_way_penalty = -2000.0
 
 

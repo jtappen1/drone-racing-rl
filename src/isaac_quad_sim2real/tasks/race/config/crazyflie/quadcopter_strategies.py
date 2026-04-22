@@ -116,22 +116,12 @@ class DefaultQuadcopterStrategy:
         # Wrong Way Penalty (Sparse)
         # ----------------------------------------------------------------- 
 
-        wrong_way_penalty = torch.zeros(self.num_envs, device=self.device)
-        targeting_gate3 = (self.env._idx_wp == 3)
-        if targeting_gate3.any():
-            wrong_way = (
-                (prev_x > 0.0)
-                & (curr_x < 0.0)
-                & (dist_to_gate < 1.0)
-                & (torch.abs(curr_y) < pass_half)
-                & (torch.abs(curr_z) < pass_half)
-                & (alignment >= 0.0)
-                & targeting_gate3
-            )
-            wrong_way_penalty[wrong_way] = 1.0
 
         ids_gate_passed = torch.where(gate_passed)[0]
-        wrong_way_penalty[ids_gate_passed] = 0.0
+        if len(ids_gate_passed) > 0:
+            curr_y_at_pass = curr_y[ids_gate_passed].clone()
+            curr_z_at_pass = curr_z[ids_gate_passed].clone()
+
 
 
         # Increment gate counter and advance waypoint
@@ -176,7 +166,11 @@ class DefaultQuadcopterStrategy:
         # Gate Pass Reward (sparse)
         # -----------------------------------------------------------------
         gate_pass_reward = torch.zeros(self.num_envs, device=self.device)
-        gate_pass_reward[ids_gate_passed] = 1.0
+
+        if len(ids_gate_passed) > 0:
+            lateral_offset = torch.sqrt(curr_y_at_pass ** 2 + curr_z_at_pass ** 2)
+            centering_score = 1.0 - (lateral_offset / half_side).clamp(0.0, 1.0)
+            gate_pass_reward[ids_gate_passed] = centering_score
 
         # -----------------------------------------------------------------
         # Lap Completion Reward (sparse)
@@ -274,14 +268,13 @@ class DefaultQuadcopterStrategy:
         # -----------------------------------------------------------------
         if self.cfg.is_train:
             rewards = {
+                # "progress_goal" : progress_diff * self.env.rew["progress_goal_reward_scale"],
                 "gate_passed": gate_pass_reward * self.env.rew["gate_passed_reward_scale"],
                 "crash": crashed * self.env.rew["crash_reward_scale"],
                 "roll_pitch": roll_pitch_rate * self.env.rew["roll_pitch_reward_scale"],
                 "yaw": yaw_rate * self.env.rew["yaw_reward_scale"],
                 "ang_accel": ang_accel_penalty * self.env.rew["ang_accel_reward_scale"],
-                "wrong_way": wrong_way_penalty * self.env.rew["wrong_way_reward_scale"],
-
-
+                # "wrong_way": wrong_way_penalty * self.env.rew["wrong_way_reward_scale"],
                 # "powerloop" :    powerloop_reward * self.env.rew["powerloop_reward_scale"],
             }
             reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
@@ -454,7 +447,7 @@ class DefaultQuadcopterStrategy:
                 z_local = torch.zeros(n_reset, device=self.device)
                 yaw_noise = torch.empty(n_reset, device=self.device).uniform_(-0.15, 0.15)
 
-            elif iteration < 2400:
+            elif iteration < 2500:
                 waypoint_indices = torch.zeros(n_reset, device=self.device, dtype=self.env._idx_wp.dtype)
                 x_local = torch.empty(n_reset, device=self.device).uniform_(-3.0, -0.5)
                 y_local = torch.empty(n_reset, device=self.device).uniform_(-1.0, 1.0)
@@ -471,7 +464,7 @@ class DefaultQuadcopterStrategy:
 
                 n = len(env_ids)
 
-                # Thrust to weight
+                 # Thrust to weight
                 self.env._thrust_to_weight[env_ids] = torch.empty(n, device=self.device).uniform_(
                     self.cfg.thrust_to_weight * 0.95,
                     self.cfg.thrust_to_weight * 1.05
@@ -525,49 +518,90 @@ class DefaultQuadcopterStrategy:
 
             n = len(env_ids)
 
-            # Thrust to weight
-            self.env._thrust_to_weight[env_ids] = torch.empty(n, device=self.device).uniform_(
-                self.cfg.thrust_to_weight * 0.95,
-                self.cfg.thrust_to_weight * 1.05
-            )
+            # # Thrust to weight
+            # self.env._thrust_to_weight[env_ids] = torch.empty(n, device=self.device).uniform_(
+            #     self.cfg.thrust_to_weight * 0.95,
+            #     self.cfg.thrust_to_weight * 1.05
+            # )
 
-            # Aerodynamics
-            self.env._K_aero[env_ids, :2] = torch.empty(n, 1, device=self.device).uniform_(
-                self.cfg.k_aero_xy * 0.5,
-                self.cfg.k_aero_xy * 2.0
-            ).expand(n, 2)
-            self.env._K_aero[env_ids, 2] = torch.empty(n, device=self.device).uniform_(
-                self.cfg.k_aero_z * 0.5,
-                self.cfg.k_aero_z * 2.0
-            )
+            # # Aerodynamics
+            # self.env._K_aero[env_ids, :2] = torch.empty(n, 1, device=self.device).uniform_(
+            #     self.cfg.k_aero_xy * 0.5,
+            #     self.cfg.k_aero_xy * 2.0
+            # ).expand(n, 2)
+            # self.env._K_aero[env_ids, 2] = torch.empty(n, device=self.device).uniform_(
+            #     self.cfg.k_aero_z * 0.5,
+            #     self.cfg.k_aero_z * 2.0
+            # )
 
-            # PID roll/pitch
-            self.env._kp_omega[env_ids, :2] = torch.empty(n, 1, device=self.device).uniform_(
-                self.cfg.kp_omega_rp * 0.85,
-                self.cfg.kp_omega_rp * 1.15
-            ).expand(n, 2)
-            self.env._ki_omega[env_ids, :2] = torch.empty(n, 1, device=self.device).uniform_(
-                self.cfg.ki_omega_rp * 0.85,
-                self.cfg.ki_omega_rp * 1.15
-            ).expand(n, 2)
-            self.env._kd_omega[env_ids, :2] = torch.empty(n, 1, device=self.device).uniform_(
-                self.cfg.kd_omega_rp * 0.7,
-                self.cfg.kd_omega_rp * 1.3
-            ).expand(n, 2)
+            # # PID roll/pitch
+            # self.env._kp_omega[env_ids, :2] = torch.empty(n, 1, device=self.device).uniform_(
+            #     self.cfg.kp_omega_rp * 0.85,
+            #     self.cfg.kp_omega_rp * 1.15
+            # ).expand(n, 2)
+            # self.env._ki_omega[env_ids, :2] = torch.empty(n, 1, device=self.device).uniform_(
+            #     self.cfg.ki_omega_rp * 0.85,
+            #     self.cfg.ki_omega_rp * 1.15
+            # ).expand(n, 2)
+            # self.env._kd_omega[env_ids, :2] = torch.empty(n, 1, device=self.device).uniform_(
+            #     self.cfg.kd_omega_rp * 0.7,
+            #     self.cfg.kd_omega_rp * 1.3
+            # ).expand(n, 2)
 
-            # PID yaw
-            self.env._kp_omega[env_ids, 2] = torch.empty(n, device=self.device).uniform_(
-                self.cfg.kp_omega_y * 0.85,
-                self.cfg.kp_omega_y * 1.15
-            )
-            self.env._ki_omega[env_ids, 2] = torch.empty(n, device=self.device).uniform_(
-                self.cfg.ki_omega_y * 0.85,
-                self.cfg.ki_omega_y * 1.15
-            )
-            self.env._kd_omega[env_ids, 2] = torch.empty(n, device=self.device).uniform_(
-                self.cfg.kd_omega_y * 0.7,
-                self.cfg.kd_omega_y * 1.3
-            )
+            # # PID yaw
+            # self.env._kp_omega[env_ids, 2] = torch.empty(n, device=self.device).uniform_(
+            #     self.cfg.kp_omega_y * 0.85,
+            #     self.cfg.kp_omega_y * 1.15
+            # )
+            # self.env._ki_omega[env_ids, 2] = torch.empty(n, device=self.device).uniform_(
+            #     self.cfg.ki_omega_y * 0.85,
+            #     self.cfg.ki_omega_y * 1.15
+            # )
+            # self.env._kd_omega[env_ids, 2] = torch.empty(n, device=self.device).uniform_(
+            #     self.cfg.kd_omega_y * 0.7,
+            #     self.cfg.kd_omega_y * 1.3
+            # )
+            # self.env._thrust_to_weight[env_ids] = torch.empty(n, device=self.device).uniform_(
+            #     self.cfg.thrust_to_weight * 0.9,
+            #     self.cfg.thrust_to_weight * 1.1
+            # )
+
+            # self.env._K_aero[env_ids, :2] = torch.empty(n, 1, device=self.device).uniform_(
+            #     self.cfg.k_aero_xy * 0.4,
+            #     self.cfg.k_aero_xy * 2.5
+            # ).expand(n, 2)
+            # self.env._K_aero[env_ids, 2] = torch.empty(n, device=self.device).uniform_(
+            #     self.cfg.k_aero_z * 0.4,
+            #     self.cfg.k_aero_z * 2.5
+            # )
+
+            # # PID roll/pitch
+            # self.env._kp_omega[env_ids, :2] = torch.empty(n, 1, device=self.device).uniform_(
+            #     self.cfg.kp_omega_rp * 0.7,
+            #     self.cfg.kp_omega_rp * 1.3
+            # ).expand(n, 2)
+            # self.env._ki_omega[env_ids, :2] = torch.empty(n, 1, device=self.device).uniform_(
+            #     self.cfg.ki_omega_rp * 0.7,
+            #     self.cfg.ki_omega_rp * 1.3
+            # ).expand(n, 2)
+            # self.env._kd_omega[env_ids, :2] = torch.empty(n, 1, device=self.device).uniform_(
+            #     self.cfg.kd_omega_rp * 0.5,
+            #     self.cfg.kd_omega_rp * 2.0
+            # ).expand(n, 2)
+
+            # # PID yaw
+            # self.env._kp_omega[env_ids, 2] = torch.empty(n, device=self.device).uniform_(
+            #     self.cfg.kp_omega_y * 0.7,
+            #     self.cfg.kp_omega_y * 1.3
+            # )
+            # self.env._ki_omega[env_ids, 2] = torch.empty(n, device=self.device).uniform_(
+            #     self.cfg.ki_omega_y * 0.7,
+            #     self.cfg.ki_omega_y * 1.3
+            # )
+            # self.env._kd_omega[env_ids, 2] = torch.empty(n, device=self.device).uniform_(
+            #     self.cfg.kd_omega_y * 0.5,
+            #     self.cfg.kd_omega_y * 2.0
+            # )
         # -----------------------------------------------------------------
         # Compute world-frame spawn position from gate-local offset
         # -----------------------------------------------------------------
@@ -669,12 +703,28 @@ class DefaultQuadcopterStrategy:
         quat_w = self.env._robot.data.root_quat_w
         attitude_mat = matrix_from_quat(quat_w)
 
+        # powerloop_pos_b_list = []
+        # for wp in self.POWERLOOP_WAYPOINTS:
+        #     # Add env_origins so each env gets its own correctly-offset waypoint
+        #     wp_world = wp.unsqueeze(0).expand(self.num_envs, -1) + self.env._terrain.env_origins
+
+        #     wp_pos_b, _ = subtract_frame_transforms(
+        #         self.env._robot.data.root_link_pos_w,
+        #         self.env._robot.data.root_quat_w,
+        #         wp_world,
+        #     )
+        #     powerloop_pos_b_list.append(wp_pos_b)
+
+        # powerloop_obs = torch.cat(powerloop_pos_b_list, dim=-1)
+        # waypoints = self.POWERLOOP_WAYPOINTS.unsqueeze(0).expand(self.num_envs, -1, -1)
+        # waypoints_pl = waypoints.reshape(self.num_envs, -1)
         obs = torch.cat(
             [
                 self.env._robot.data.root_com_lin_vel_b,			# 3 dim (linear vel in body frame)
                 attitude_mat.view(attitude_mat.shape[0], -1),			# 9 dim (drone rotation matrix)
                 waypoint_pos_b_curr.view(waypoint_pos_b_curr.shape[0], -1),	# 12 dim (corners of current gate)
                 waypoint_pos_b_next.view(waypoint_pos_b_next.shape[0], -1),	# 12 dim (corners of next gate)
+                # waypoints_pl
             ],
             dim=-1,
         )
