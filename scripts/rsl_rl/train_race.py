@@ -107,21 +107,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     log_dir = os.path.join(log_root_path, log_dir)
 
     # TODO ----- START ----- Define rewards scales
-    progress_goal_reward_scale = 2.0
-    gate_passed_reward_scale = 150.0
-    crash_reward_scale = -1.5
-    death_cost = -300.0
-    roll_pitch_reward_scale = -0.07
-    yaw_reward_scale = -0.001
-    ang_accel_reward_scale = -0.00005 
-    wrong_way_penalty = -2000.0
-
-
-    # speed_reward_scale = -0.10
-    # time_penalty_reward_scale = 0.1
-    # powerloop_reward_scale = 1.5
-    # speed_reward_scale = 1.85 #0.5
-    # ang_vel_penalty_reward_scale = -0.005
+    gate_passed_reward_scale = 200.0
+    crash_reward_scale = -1.2
+    death_cost = -400.0
+    roll_pitch_reward_scale = -0.05
+    yaw_reward_scale = -0.005
+    ang_accel_reward_scale = -0.000001 
 
     #####
     # Base Policy with proper gate alignment is trained WITHOUT speed reward, angular velocity penalty, and time penalty
@@ -129,21 +120,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
 
     rewards = {
-        'progress_goal_reward_scale': progress_goal_reward_scale,
         'gate_passed_reward_scale': gate_passed_reward_scale,
         'crash_reward_scale': crash_reward_scale,
         'death_cost': death_cost,
         'roll_pitch_reward_scale' : roll_pitch_reward_scale,
         'yaw_reward_scale' : yaw_reward_scale,
         'ang_accel_reward_scale': ang_accel_reward_scale,
-        'wrong_way_reward_scale': wrong_way_penalty
-        
-        # 'lookahead_reward_scale' : lookahead_reward_scale,
-        # 'speed_reward_scale': speed_reward_scale 
-        # "powerloop_reward_scale" : powerloop_reward_scale, 
-        # 'time_penalty_reward_scale': time_penalty_reward_scale,
-        # 'speed_reward_scale': speed_reward_scale,
-        # 'ang_vel_penalty_reward_scale': ang_vel_penalty_reward_scale,
     }
     # TODO ----- END -----
 
