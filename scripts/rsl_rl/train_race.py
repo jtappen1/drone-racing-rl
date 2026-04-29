@@ -22,6 +22,7 @@ import argparse
 from isaaclab.app import AppLauncher
 import cli_args
 
+
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Train an RL agent with RSL-RL.")
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
@@ -106,20 +107,32 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     log_dir = os.path.join(log_root_path, log_dir)
 
     # TODO ----- START ----- Define rewards scales
-    # reward scales
-    progress_goal_reward_scale = 50.0
-    crash_reward = -1.0
-    death_cost = -10.0
+    gate_passed_reward_scale = 200.0
+    crash_reward_scale = -1.2
+    death_cost = -400.0
+    roll_pitch_reward_scale = -0.05
+    yaw_reward_scale = -0.005
+    ang_accel_reward_scale = -0.000001 
+
+    #####
+    # Base Policy with proper gate alignment is trained WITHOUT speed reward, angular velocity penalty, and time penalty
+    # The base policy gets improved by using it as a checkpoint with more niche rewards
+
 
     rewards = {
-        'progress_goal_reward_scale': progress_goal_reward_scale,
-        'crash_reward_scale': crash_reward,
+        'gate_passed_reward_scale': gate_passed_reward_scale,
+        'crash_reward_scale': crash_reward_scale,
         'death_cost': death_cost,
+        'roll_pitch_reward_scale' : roll_pitch_reward_scale,
+        'yaw_reward_scale' : yaw_reward_scale,
+        'ang_accel_reward_scale': ang_accel_reward_scale,
     }
     # TODO ----- END -----
 
     env_cfg.is_train = True
     env_cfg.rewards = rewards
+    # So the env can compute common_step_counter for curriculum (e.g. in reset_idx).
+    env_cfg.num_steps_per_env = getattr(agent_cfg, "num_steps_per_env", 24)
 
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None, rewards=rewards)

@@ -33,11 +33,14 @@ from typing import List
 from dataclasses import dataclass, field
 from datetime import datetime
 import csv
+import datetime
 
 from scipy.spatial.transform import Rotation as R
 
 # Import strategy class
 from .quadcopter_strategies import DefaultQuadcopterStrategy
+import os
+import matplotlib.pyplot as plt
 
 ##
 # Drone config
@@ -345,6 +348,12 @@ class QuadcopterEnv(DirectRLEnv):
 
         self.set_debug_vis(self.cfg.debug_vis)
 
+        self._stats_total_laps = 0
+        self._stats_total_crashes = 0
+        self._stats_lap_times = []
+        self._stats_start_step = 0
+        self._stats_history = [] 
+
     def update_iteration(self, iter):
         self.iteration = iter
 
@@ -429,6 +438,12 @@ class QuadcopterEnv(DirectRLEnv):
                 [ 1.5, 7.00, 0.75, 0.0, 0.0,  1.57],
                 [ 0.0, 5.25, 1.50, 0.0, 0.0,  0.00],
                 [-2.0, 3.50, 0.75, 0.0, 0.0,  1.57],
+            ],
+            'circle': [
+                [ 0.0 , 3.0 , 0.75 , 0.0 , 0.0 , 0.00] ,
+                [ -1.5 , 4.5 , 0.75 , 0.0 , 0.0 , -1.57] ,
+                [ 0.0 , 6.0 , 1.75 , 0.0 , 0.0 , 3.14] ,
+                [ 1.5 , 4.5 , 0.75 , 0.0 , 0.0 , 1.57]
             ]
         }
 
@@ -515,6 +530,14 @@ class QuadcopterEnv(DirectRLEnv):
                         # this creates multiple convex shapes that preserve the gate opening
                         mesh_collision_api = UsdPhysics.MeshCollisionAPI.Apply(mesh_prim)
                         mesh_collision_api.CreateApproximationAttr().Set("convexDecomposition")
+
+
+            POWERLOOP_WAYPOINTS = np.array([
+                [-0.4, -0.3, 1.4],
+                [-0.1,  0.0, 2.0],
+                [0.3, 0.5, 1.8],
+                [0.625, 0.0, 0.75],
+            ])
 
             arrow_length = 0.5
             arrow_body_radius = 0.01
@@ -656,6 +679,62 @@ class QuadcopterEnv(DirectRLEnv):
 
         self._robot.set_external_force_and_torque(self._thrust, self._moment, body_ids=self._body_id)
 
+    def _save_stats_plot(self):
+        if not self._stats_history:
+            return
+
+        latest      = self._stats_history[-1]
+        total        = latest["episode"]
+        completions  = latest["completions"]
+        crashes      = latest["crashes"]
+        times        = np.array(self._stats_lap_times) if self._stats_lap_times else np.array([])
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+
+        # -- left panel: crash/completion counts --
+        bars = ax1.bar(
+            ["Completions", "Crashes"],
+            [completions, crashes],
+            color=["tab:green", "tab:red"],
+            edgecolor="white",
+            width=0.5,
+        )
+        for bar, val in zip(bars, [completions, crashes]):
+            ax1.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + 0.5,
+                str(val),
+                ha="center", va="bottom", fontsize=13, fontweight="bold"
+            )
+        ax1.set_title(f"Outcomes — {completions} completions / {crashes} crashes out of {total} episodes", fontsize=11)
+        ax1.set_ylabel("Count")
+        ax1.set_ylim(0, max(completions, crashes) * 1.2 + 1)
+        ax1.grid(axis="y", linestyle="--", alpha=0.5)
+
+        # -- right panel: lap time distribution --
+        if len(times) > 0:
+            ax2.hist(times, bins="auto", color="tab:purple", alpha=0.75, edgecolor="white")
+            ax2.axvline(times.mean(),     color="tab:green",  linewidth=1.5, linestyle="--", label=f"Mean   {times.mean():.2f}s")
+            ax2.axvline(np.median(times), color="tab:orange", linewidth=1.5, linestyle="--", label=f"Median {np.median(times):.2f}s")
+            ax2.axvline(times.min(),      color="tab:olive",  linewidth=1.5, linestyle=":",  label=f"Best   {times.min():.2f}s")
+            ax2.axvline(times.max(),      color="tab:red",    linewidth=1.5, linestyle=":",  label=f"Worst  {times.max():.2f}s")
+            ax2.set_xlabel("Avg lap time (s)")
+            ax2.set_ylabel("Count")
+            ax2.set_title("Lap time distribution")
+            ax2.legend(loc="upper right")
+            ax2.grid(True, linestyle="--", alpha=0.5)
+        else:
+            ax2.text(0.5, 0.5, "No lap times yet", ha="center", va="center", transform=ax2.transAxes)
+
+        fig.suptitle("Play-mode race stats", fontsize=13, fontweight="bold")
+        fig.tight_layout()
+
+        os.makedirs("logs/play_stats", exist_ok=True)
+        out_path = f"logs/play_stats/race_stats.png"
+        fig.savefig(out_path, dpi=120)
+        plt.close(fig)
+        print(f"[Stats] Plot saved → {out_path}  ({completions}/{total} completed, {crashes} crashed)")
+
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         drone_pose = self._robot.data.root_link_state_w[:, :3]
         self._pose_drone_wrt_gate, _ = subtract_frame_transforms(self._waypoints[self._idx_wp, :3],
@@ -687,8 +766,36 @@ class QuadcopterEnv(DirectRLEnv):
         # timeout conditions
         time_out = self.episode_length_buf >= self.max_episode_length - 1
         if not self.cfg.is_train:
-            time_out = time_out | ((self._n_gates_passed - 1) // (self._waypoints.shape[0]) >= self.cfg.max_n_laps)
+            lap_done = (self._n_gates_passed - 1) // (self._waypoints.shape[0]) >= self.cfg.max_n_laps
 
+            finishing_envs = torch.where(lap_done & ~time_out)[0]
+
+            if len(finishing_envs) > 0:
+                elapsed_s = self.episode_length_buf[finishing_envs].float() * self.cfg.sim.dt * self.cfg.decimation
+                avg_laps = elapsed_s / self.cfg.max_n_laps
+                self._stats_lap_times.extend(avg_laps.tolist())
+                self._stats_total_laps += len(finishing_envs)
+
+            died_envs = torch.where(died)[0]
+            if len(died_envs) > 0:
+                self._stats_total_crashes += len(died_envs)
+
+            # Checkpoint: plot every 10 episodes
+            total = self._stats_total_laps + self._stats_total_crashes
+            if total > 0 and total % 10 == 0:
+                times = self._stats_lap_times
+                self._stats_history.append({
+                    "episode":      total,
+                    "success_rate": self._stats_total_laps / total * 100,
+                    "avg_lap":      sum(times) / len(times) if times else 0,
+                    "best_lap":     min(times) if times else 0,
+                    "worst_lap":    max(times) if times else 0,
+                    "completions":  self._stats_total_laps,
+                    "crashes":      self._stats_total_crashes,
+                })
+                self._save_stats_plot()
+
+            time_out = time_out | lap_done
         return died, time_out
 
     def _get_rewards(self) -> torch.Tensor:
