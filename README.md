@@ -1,4 +1,4 @@
-# ESE 651: Physical Intelligence - Drone Racing Project
+# Drone Racing Project
 
 This project repository contains the code for the drone racing environment, training, and evaluation using NVIDIA Isaac Lab. The repo also includes a custom copy of the rsl_rl robot learning library where you will implement Proximal Policy Optimization (PPO).
 
